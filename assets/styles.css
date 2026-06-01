@@ -115,3 +115,11 @@ video { max-height: 430px; }
   .status-grid { grid-template-columns: 1fr; }
   .panel-inner { padding: 18px; }
 }
+
+.compact-main { padding-top: 24px; }
+.compact-title { margin: 0 0 10px; font-size: clamp(28px, 4vw, 44px); letter-spacing: -0.055em; }
+.single-action { grid-template-columns: 1fr; }
+.single-action .btn { min-height: 64px; font-size: 20px; border-radius: 24px; }
+.single-download { grid-template-columns: 1fr; }
+.result-textarea { min-height: 420px; font-size: 16px; line-height: 1.75; }
+@media (max-width: 720px) { .compact-main { padding-top: 14px; } }

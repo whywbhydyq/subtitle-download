@@ -3,59 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>subtitle-download - 链接视频检测、音频提取与文字/SRT生成</title>
-  <meta name="description" content="subtitle-download 是纯前端链接视频检测与音频转文字工具。输入 YouTube、视频直链、音频直链或 HLS 链接后，网页会反馈连接、可操作、可播放、可捕获状态，并显示音频提取和转文字进度。">
+  <title>subtitle-download - 链接音频转文字</title>
+  <meta name="description" content="subtitle-download 是纯前端链接检测、音频捕获与本地转文字工具。">
   <link rel="canonical" href="https://subtitle-download.gitlcp.com/">
   <link rel="stylesheet" href="assets/styles.css">
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js" defer></script>
   <script src="assets/subtitle-download.js" defer></script>
 </head>
 <body>
-  <header class="shell header">
-    <a class="brand" href="index.html" aria-label="subtitle-download 首页">
-      <span class="logo" aria-hidden="true"></span>
-      <span>
-        <span class="brand-title">subtitle-download</span><br>
-        <span class="subtle" style="font-size:13px">链接检测 · 音频提取 · 本地转文字</span>
-      </span>
-    </a>
-    <nav class="nav" aria-label="主导航">
-      <a href="#app">开始使用</a>
-      <a href="about.html">关于</a>
-      <a href="privacy.html">隐私</a>
-      <a href="contact.html">联系</a>
-    </nav>
-  </header>
-
-  <main class="shell">
-    <section class="hero">
-      <div>
-        <h1>把链接丢进去，立刻看到它到底能不能用。</h1>
-        <p>
-          输入 YouTube 页面链接、视频直链、音频直链或 HLS 链接后，网页会立即反馈链接类型、连接状态、播放器是否可操作、是否可播放、是否能捕获音频，并显示音频提取和转文字进度。YouTube 等 iframe 链接会走“当前标签页音频捕获”授权流程。
-        </p>
-        <div class="badges">
-          <span class="badge">纯前端页面</span>
-          <span class="badge">Chrome 桌面端优先</span>
-          <span class="badge">极速文本优先</span>
-          <span class="badge">模型预热缓存</span>
-          <span class="badge">支持全长捕获</span>
-          <span class="badge">边录边转文字</span>
-          <span class="badge">TXT / SRT 导出</span>
-        </div>
-      </div>
-      <aside class="notice">
-        <strong>YouTube 处理逻辑：</strong>网页先用 IFrame API 检测 YouTube 链接是否能连接、能操作、能播放；随后提供“捕获当前标签页音频”按钮。用户在浏览器弹窗里选择当前标签页并勾选共享音频后，subtitle-download 会录制标签页音频并本地转文字。
-      </aside>
-    </section>
-
+  <main class="shell compact-main">
     <section id="app" class="app-grid" aria-label="subtitle-download 应用">
       <div class="panel">
         <div class="panel-inner">
-          <h2>链接检测与音频转文字</h2>
-          <p class="subtle" style="margin:10px 0 0">
-            一次点击先给出可用性反馈；默认捕获到视频结束或手动停止，并按 45 秒分段边录边转文字；不再等完整长视频录完才开始 ASR。需要快速测试时，可在“捕获时长”里填指定秒数。
-          </p>
+          <h1 class="compact-title">subtitle-download</h1>
 
           <div class="form-row">
             <label for="source-url">视频 / 音频链接</label>
@@ -72,9 +32,9 @@
             <div class="form-row">
               <label for="language-select">识别语言</label>
               <select id="language-select" class="select">
-                <option value="auto" selected>自动 / 中英混合</option>
-                <option value="zh">中文优先</option>
-                <option value="en">英文优先</option>
+                <option value="auto" selected>自动识别原文语言</option>
+                <option value="zh">强制中文原文</option>
+                <option value="en">强制英文原文</option>
               </select>
             </div>
             <div class="form-row">
@@ -87,52 +47,47 @@
             <div class="form-row">
               <label for="capture-seconds">捕获时长 / 秒</label>
               <input id="capture-seconds" class="input" type="number" min="0" max="14400" value="0" style="font-family:inherit" title="0 表示不按秒数截断，直到视频结束或手动停止">
-              <div class="field-hint">0 = 捕获到视频结束 / 手动停止；填数字 = 只捕获指定秒数。</div>
+              <div class="field-hint">0 = 全长；填数字 = 只捕获指定秒数。</div>
             </div>
             <div class="form-row">
               <label for="segment-seconds">分段转写 / 秒</label>
-              <input id="segment-seconds" class="input" type="number" min="10" max="300" value="45" style="font-family:inherit" title="长视频会边录边按这个长度切段转文字">
-              <div class="field-hint">长视频边录边识别；30-60 秒通常更稳。</div>
+              <input id="segment-seconds" class="input" type="number" min="5" max="120" value="10" style="font-family:inherit" title="长视频会边录边按这个长度切段转文字">
+              <div class="field-hint">默认 10 秒：更快追加完整文本。</div>
             </div>
             <div class="form-row">
+              <label for="playback-rate">捕获播放倍速</label>
+              <select id="playback-rate" class="select">
+                <option value="1">1x 最稳</option>
+                <option value="1.25">1.25x</option>
+                <option value="1.5">1.5x</option>
+                <option value="2" selected>2x 极速</option>
+              </select>
+              <div class="field-hint">中文识别不稳时改 1x；追求速度用 2x。</div>
+            </div>
+            <div class="form-row hidden">
               <label for="timestamp-mode">输出模式</label>
               <select id="timestamp-mode" class="select">
-                <option value="fast" selected>极速文本 + 粗略 SRT</option>
-                <option value="accurate">时间戳 SRT（较慢）</option>
+                <option value="fast" selected>纯文本输出</option>
               </select>
             </div>
           </div>
 
-          <div class="actions">
-            <button id="inspect-btn" class="btn btn-primary" type="button">检测链接并尝试播放</button>
-            <button id="auto-btn" class="btn btn-green" type="button">检测后自动捕获并转文字</button>
-            <button id="prewarm-btn" class="btn btn-outline" type="button">预热模型缓存</button>
-            <button id="capture-start-btn" class="btn btn-amber" type="button">开始捕获媒体音频</button>
-            <button id="capture-tab-btn" class="btn btn-amber" type="button">捕获当前标签页音频</button>
-            <button id="capture-stop-btn" class="btn btn-dark" type="button">停止并识别</button>
+          <div class="actions single-action">
+            <button id="one-click-btn" class="btn btn-green" type="button">开始检测、捕获并转文字</button>
+            <button id="inspect-btn" class="btn btn-primary hidden" type="button">检测链接并尝试播放</button>
+            <button id="auto-btn" class="btn btn-green hidden" type="button">检测后自动捕获并转文字</button>
+            <button id="prewarm-btn" class="btn btn-outline hidden" type="button">预热模型缓存</button>
+            <button id="capture-start-btn" class="btn btn-amber hidden" type="button">开始捕获媒体音频</button>
+            <button id="capture-tab-btn" class="btn btn-amber hidden" type="button">捕获当前标签页音频</button>
+            <button id="capture-stop-btn" class="btn btn-dark hidden" type="button">停止并识别</button>
           </div>
 
           <div class="status-grid" aria-label="链接检测结果">
-            <div class="status-card">
-              <div class="status-label">链接类型</div>
-              <div id="check-type" class="status-value pending">未检测</div>
-            </div>
-            <div class="status-card">
-              <div class="status-label">连接</div>
-              <div id="check-connect" class="status-value pending">未检测</div>
-            </div>
-            <div class="status-card">
-              <div class="status-label">可操作</div>
-              <div id="check-control" class="status-value pending">未检测</div>
-            </div>
-            <div class="status-card">
-              <div class="status-label">可播放</div>
-              <div id="check-play" class="status-value pending">未检测</div>
-            </div>
-            <div class="status-card">
-              <div class="status-label">可捕获音频</div>
-              <div id="check-capture" class="status-value pending">未检测</div>
-            </div>
+            <div class="status-card"><div class="status-label">链接类型</div><div id="check-type" class="status-value pending">未检测</div></div>
+            <div class="status-card"><div class="status-label">连接</div><div id="check-connect" class="status-value pending">未检测</div></div>
+            <div class="status-card"><div class="status-label">可操作</div><div id="check-control" class="status-value pending">未检测</div></div>
+            <div class="status-card"><div class="status-label">可播放</div><div id="check-play" class="status-value pending">未检测</div></div>
+            <div class="status-card"><div class="status-label">可捕获音频</div><div id="check-capture" class="status-value pending">未检测</div></div>
           </div>
 
           <div class="progress-stack" aria-label="处理进度">
@@ -160,10 +115,10 @@
             <div id="youtube-player" style="width:100%;height:100%"></div>
           </div>
 
-          <div class="downloads">
-            <button id="download-audio-btn" class="btn btn-outline" type="button">下载音频</button>
+          <div class="downloads single-download">
+            <button id="download-audio-btn" class="btn btn-outline hidden" type="button">下载音频</button>
             <button id="download-txt-btn" class="btn btn-outline" type="button">下载 TXT</button>
-            <button id="download-srt-btn" class="btn btn-outline" type="button">下载 SRT</button>
+            <button id="download-srt-btn" class="btn btn-outline hidden" type="button">下载 SRT</button>
           </div>
         </div>
       </div>
@@ -171,42 +126,19 @@
       <aside class="output-stack">
         <div class="panel">
           <div class="panel-inner">
-            <h3>实时诊断日志</h3>
-            <p class="subtle" style="margin:8px 0 14px;font-size:13px">点击按钮后，这里会持续输出连接、播放、捕获和识别阶段。</p>
-            <div id="diagnostics-log" class="log" data-empty="true"><div class="line">[等待] 粘贴链接后点击“检测链接并尝试播放”。</div></div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-inner">
             <h3>识别结果</h3>
-            <textarea id="transcript-output" class="textarea" readonly placeholder="边录边识别时，每完成一个分段就会把文字追加到这里。"></textarea>
+            <textarea id="transcript-output" class="textarea result-textarea" readonly placeholder="这里只显示纯文本，不显示时间戳。长视频会按分段持续追加，直到全部完成。"></textarea>
           </div>
         </div>
-
         <div class="panel">
           <div class="panel-inner">
-            <h3>SRT 字幕</h3>
-            <textarea id="srt-output" class="textarea" readonly placeholder="边录边识别时，每完成一个分段就会追加粗略 SRT；时间戳模式会尝试生成更细分段。"></textarea>
+            <h3>实时诊断日志</h3>
+            <div id="diagnostics-log" class="log" data-empty="true"><div class="line">[等待] 粘贴链接后点击“开始检测、捕获并转文字”。</div></div>
           </div>
         </div>
-
-        <div class="panel">
-          <div class="panel-inner">
-            <h3>当前规则</h3>
-            <div class="kv" style="margin-top:14px"><strong>YouTube</strong><span>检测连接、可操作、可播放；通过浏览器授权捕获当前标签页音频后本地转文字。</span></div>
-            <div class="kv"><strong>分段识别</strong><span>长视频默认按 45 秒切段，边捕获边转写；40 分钟视频不再等整段音频录完才开始识别。</span></div>
-            <div class="kv"><strong>模型缓存</strong><span>页面启动后会后台预热当前 Tiny 模型，并用 Service Worker / 浏览器缓存减少重复下载。</span></div>
-            <div class="kv"><strong>媒体直链</strong><span>尝试播放、captureStream 捕获、MediaRecorder 封装音频、本地 Whisper 转文字。</span></div>
-            <div class="kv"><strong>普通网页</strong><span>不能直接拆出视频音频；需要真实媒体链接或服务端解析。</span></div>
-          </div>
-        </div>
+        <textarea id="srt-output" class="hidden" readonly></textarea>
       </aside>
     </section>
   </main>
-
-  <footer class="shell footer">
-    <div>© 2026 subtitle-download · 纯前端诊断与本地识别工具。请只处理你有权使用的媒体内容。</div>
-  </footer>
 </body>
 </html>

@@ -55,7 +55,7 @@
     asrRunId: 0,
     segmentSessionId: 0,
     segmentMode: true,
-    segmentSeconds: 45,
+    segmentSeconds: 10,
     segmentRecorder: null,
     segmentTimer: null,
     segmentStartedAt: 0,
@@ -69,7 +69,18 @@
     audioParts: [],
     capturedSegmentCount: 0,
     transcribedSegmentCount: 0,
-    transcribedSeconds: 0
+    transcribedSeconds: 0,
+    captureBaseMediaTime: 0,
+    capturePlaybackRate: 1,
+    pcmContext: null,
+    pcmSource: null,
+    pcmProcessor: null,
+    pcmGain: null,
+    pcmBuffer: [],
+    pcmBufferedSamples: 0,
+    pcmSampleRate: 16000,
+    pcmSegmentVideoStart: 0,
+    oneClickAwaitingTabCapture: false
   };
 
   function timeNow() {
@@ -94,7 +105,7 @@
     const box = $('diagnostics-log');
     if (!box) return;
     box.dataset.empty = 'true';
-    box.innerHTML = '<div class="line">[等待] 粘贴链接后点击“检测链接并尝试播放”。</div>';
+    box.innerHTML = '<div class="line">[等待] 粘贴链接后点击“开始检测、捕获并转文字”。</div>';
   }
 
 
@@ -177,12 +188,14 @@
     app.segmentTimer = null;
     if (app.capturedUrl) URL.revokeObjectURL(app.capturedUrl);
     app.captureMode = '';
+    app.oneClickAwaitingTabCapture = false;
     app.capturedUrl = '';
     app.capturedBlob = null;
     app.chunks = [];
     app.audioParts = [];
     app.segmentQueue = [];
     app.segmentResults = [];
+    stopPcmSegmenter(false);
     app.segmentRecorder = null;
     app.segmentCaptureStream = null;
     app.segmentIndex = 0;
@@ -548,16 +561,83 @@
       : 0;
     const rawSegmentSeconds = Number($('segment-seconds')?.value);
     const segmentSeconds = Number.isFinite(rawSegmentSeconds) && rawSegmentSeconds > 0
-      ? Math.max(10, Math.min(300, rawSegmentSeconds))
-      : 45;
+      ? Math.max(5, Math.min(120, rawSegmentSeconds))
+      : 10;
     return {
       language: $('language-select')?.value || 'auto',
       model: $('model-select')?.value || 'tiny',
       seconds,
       unlimitedCapture: seconds === 0,
       segmentSeconds,
-      timestampMode: $('timestamp-mode')?.value || 'fast'
+      timestampMode: $('timestamp-mode')?.value || 'fast',
+      playbackRate: Math.max(1, Math.min(2, Number($('playback-rate')?.value) || 1))
     };
+  }
+
+  function getCurrentMediaPositionSeconds() {
+    try {
+      if (app.currentKind === 'youtube' && app.ytPlayer && typeof app.ytPlayer.getCurrentTime === 'function') {
+        const t = Number(app.ytPlayer.getCurrentTime());
+        if (Number.isFinite(t) && t >= 0) return t;
+      }
+      const media = $('media-element');
+      if (media && Number.isFinite(media.currentTime) && media.currentTime >= 0) return media.currentTime;
+    } catch (_) {}
+    return 0;
+  }
+
+  function getMediaDurationSeconds() {
+    try {
+      if (app.currentKind === 'youtube' && app.ytPlayer && typeof app.ytPlayer.getDuration === 'function') {
+        const d = Number(app.ytPlayer.getDuration());
+        if (Number.isFinite(d) && d > 0) return d;
+      }
+      const media = $('media-element');
+      if (media && Number.isFinite(media.duration) && media.duration > 0) return media.duration;
+    } catch (_) {}
+    return 0;
+  }
+
+  function applyCapturePlaybackRate() {
+    const settings = currentSettings();
+    const rate = settings.playbackRate || 1;
+    app.capturePlaybackRate = rate;
+    try {
+      if (app.currentKind === 'youtube' && app.ytPlayer) {
+        if (typeof app.ytPlayer.getAvailablePlaybackRates === 'function' && typeof app.ytPlayer.setPlaybackRate === 'function') {
+          const available = app.ytPlayer.getAvailablePlaybackRates() || [];
+          const selected = available.length ? available.reduce((best, x) => Math.abs(x - rate) < Math.abs(best - rate) ? x : best, available[0]) : rate;
+          app.ytPlayer.setPlaybackRate(selected);
+          app.capturePlaybackRate = Number(selected) || rate;
+          log('捕获播放倍速已设置为 ' + app.capturePlaybackRate + 'x。', 'success');
+          return app.capturePlaybackRate;
+        }
+      }
+      const media = $('media-element');
+      if (media) {
+        media.playbackRate = rate;
+        app.capturePlaybackRate = rate;
+        log('媒体捕获播放倍速已设置为 ' + rate + 'x。', 'success');
+        return rate;
+      }
+    } catch (error) {
+      log('设置播放倍速失败，继续使用当前倍速：' + error.message, 'warn');
+    }
+    return app.capturePlaybackRate || 1;
+  }
+
+  function currentCaptureTimelineSeconds() {
+    const mediaElapsed = getCurrentMediaPositionSeconds() - app.captureBaseMediaTime;
+    if (Number.isFinite(mediaElapsed) && mediaElapsed > 0) return mediaElapsed;
+    const elapsedWall = Math.max(0, (Date.now() - app.captureStartedAt) / 1000);
+    return elapsedWall * (app.capturePlaybackRate || 1);
+  }
+
+  function makeCaptureProgressText(elapsedWall, mediaElapsed, target, bytes) {
+    if (target > 0) {
+      return '正在捕获音频：已覆盖视频 ' + mediaElapsed.toFixed(1) + ' / ' + target.toFixed(1) + ' 秒，实际耗时 ' + elapsedWall.toFixed(1) + ' 秒，已缓存 ' + formatBytes(bytes) + '。';
+    }
+    return '正在捕获音频：实际 ' + elapsedWall.toFixed(1) + ' 秒，约覆盖视频 ' + mediaElapsed.toFixed(1) + ' 秒，已缓存 ' + formatBytes(bytes) + '。';
   }
 
   function getRemainingMediaSeconds() {
@@ -616,6 +696,8 @@
       }
       if (info.kind === 'youtube') {
         await inspectYouTube(input, info.youtubeId);
+        app.oneClickAwaitingTabCapture = true;
+        updateOneClickButton();
         return;
       }
       const canCapture = await loadNativeMedia(input, info.kind);
@@ -623,6 +705,7 @@
       if (canCapture && autoCapture) {
         await startCapture();
       }
+      updateOneClickButton();
     } catch (error) {
       setStatus('check-control', '失败', 'bad');
       setStatus('check-play', '失败', 'bad');
@@ -638,12 +721,10 @@
     app.captureTimer = setInterval(() => {
       const elapsed = (Date.now() - app.captureStartedAt) / 1000;
       const bytes = app.chunks.reduce((sum, chunk) => sum + chunk.size, 0);
+      const mediaElapsed = currentCaptureTimelineSeconds();
       const target = app.captureTargetSeconds > 0 ? app.captureTargetSeconds : 0;
-      const pct = target > 0 ? Math.min(100, (elapsed / target) * 100) : Math.min(95, 8 + elapsed / 18);
-      const limitText = target > 0
-        ? elapsed.toFixed(1) + ' / ' + target.toFixed(1) + ' 秒'
-        : elapsed.toFixed(1) + ' 秒 / 全长或手动停止';
-      setProgress('audio', pct, app.captureMode || '音频提取', '正在捕获音频：' + limitText + '，已缓存 ' + formatBytes(bytes) + '。');
+      const pct = target > 0 ? Math.min(100, (mediaElapsed / target) * 100) : Math.min(95, 8 + mediaElapsed / 18);
+      setProgress('audio', pct, app.captureMode || '音频提取', makeCaptureProgressText(elapsed, mediaElapsed, target, bytes));
       setProgress('overall', Math.min(72, 58 + pct * 0.14), '音频提取', '音频捕获进行中。');
     }, 500);
   }
@@ -674,40 +755,174 @@
   }
 
   function enqueueSegment(segment) {
+    if (!segment || !segment.blob || segment.blob.size <= 0) return;
     app.segmentQueue.push(segment);
     app.capturedSegmentCount += 1;
     const target = app.captureTargetSeconds > 0 ? app.captureTargetSeconds : 0;
     const pct = target > 0 ? Math.min(96, (segment.end / target) * 100) : Math.min(96, 8 + segment.end / 18);
-    setProgress('audio', pct, app.captureMode || '音频提取', '已切出第 ' + segment.index + ' 段：' + segment.start.toFixed(1) + '-' + segment.end.toFixed(1) + ' 秒，等待/正在转写。');
-    log('音频第 ' + segment.index + ' 段已进入转写队列：' + formatBytes(segment.blob.size) + '，' + segment.start.toFixed(1) + '-' + segment.end.toFixed(1) + ' 秒。', 'success');
+    setProgress('audio', pct, app.captureMode || '音频提取', '已切出第 ' + segment.index + ' 段：累计覆盖到 ' + segment.end.toFixed(1) + ' 秒，正在持续追加文字。');
+    log('音频第 ' + segment.index + ' 段进入转写队列：' + formatBytes(segment.blob.size) + '，覆盖 ' + segment.start.toFixed(1) + '-' + segment.end.toFixed(1) + ' 秒。', 'success');
     processSegmentQueue();
   }
 
-  function shouldContinueSegmenting() {
-    if (app.segmentStopRequested) return false;
-    if (!app.segmentCaptureStream) return false;
-    if (!app.segmentCaptureStream.getAudioTracks().some((track) => track.readyState === 'live')) return false;
-    if (app.captureHardLimitSeconds > 0) {
-      const elapsed = (Date.now() - app.captureStartedAt) / 1000;
-      if (elapsed >= app.captureHardLimitSeconds - 0.2) return false;
+  function mergeFloat32Chunks(chunks, totalSamples) {
+    const merged = new Float32Array(totalSamples);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
     }
-    return true;
+    return merged;
+  }
+
+  function encodeWav(samples, sampleRate) {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+    const writeString = (offset, text) => {
+      for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+    };
+    writeString(0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeString(36, 'data');
+    view.setUint32(40, samples.length * 2, true);
+    let offset = 44;
+    for (let i = 0; i < samples.length; i += 1) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      offset += 2;
+    }
+    return new Blob([view], { type: 'audio/wav' });
+  }
+
+  function clearPcmBuffer() {
+    app.pcmBuffer = [];
+    app.pcmBufferedSamples = 0;
+  }
+
+  function cutPcmSegment(sampleCount) {
+    let remaining = sampleCount;
+    const out = [];
+    let outSamples = 0;
+    while (remaining > 0 && app.pcmBuffer.length) {
+      const first = app.pcmBuffer[0];
+      if (first.length <= remaining) {
+        out.push(first);
+        outSamples += first.length;
+        remaining -= first.length;
+        app.pcmBuffer.shift();
+      } else {
+        out.push(first.slice(0, remaining));
+        outSamples += remaining;
+        app.pcmBuffer[0] = first.slice(remaining);
+        remaining = 0;
+      }
+    }
+    app.pcmBufferedSamples = Math.max(0, app.pcmBufferedSamples - outSamples);
+    return mergeFloat32Chunks(out, outSamples);
+  }
+
+  function flushPcmSegment(force = false) {
+    if (!app.pcmBufferedSamples) return;
+    const settings = currentSettings();
+    const sampleRate = app.pcmSampleRate || 16000;
+    const segmentSamples = Math.max(1, Math.floor((settings.segmentSeconds || 10) * sampleRate));
+    while (app.pcmBufferedSamples >= segmentSamples || (force && app.pcmBufferedSamples > sampleRate * 0.5)) {
+      const wanted = app.pcmBufferedSamples >= segmentSamples ? segmentSamples : app.pcmBufferedSamples;
+      const samples = cutPcmSegment(wanted);
+      if (!samples.length) break;
+      const audioSeconds = samples.length / sampleRate;
+      const videoSeconds = audioSeconds * (app.capturePlaybackRate || 1);
+      const start = app.pcmSegmentVideoStart;
+      const end = start + videoSeconds;
+      app.pcmSegmentVideoStart = end;
+      const index = app.segmentIndex + 1;
+      app.segmentIndex = index;
+      enqueueSegment({
+        index,
+        start,
+        end,
+        duration: audioSeconds,
+        blob: encodeWav(samples, sampleRate)
+      });
+    }
+  }
+
+  async function startPcmSegmenter(audioStream) {
+    stopPcmSegmenter(false);
+    clearPcmBuffer();
+    app.pcmSegmentVideoStart = Math.max(0, currentCaptureTimelineSeconds());
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCtor) throw new Error('当前浏览器不支持 Web Audio，无法分段转写。');
+    const context = new AudioContextCtor({ sampleRate: 16000 });
+    if (context.state === 'suspended') {
+      try { await context.resume(); } catch (_) {}
+    }
+    app.pcmContext = context;
+    app.pcmSampleRate = context.sampleRate || 16000;
+    app.pcmSource = context.createMediaStreamSource(audioStream);
+    app.pcmProcessor = context.createScriptProcessor(4096, 1, 1);
+    app.pcmGain = context.createGain();
+    app.pcmGain.gain.value = 0;
+    app.pcmProcessor.onaudioprocess = (event) => {
+      if (app.segmentStopRequested) return;
+      const input = event.inputBuffer;
+      const channels = input.numberOfChannels || 1;
+      const length = input.length || 0;
+      const mono = new Float32Array(length);
+      for (let ch = 0; ch < channels; ch += 1) {
+        const data = input.getChannelData(ch);
+        for (let i = 0; i < length; i += 1) mono[i] += data[i] / channels;
+      }
+      app.pcmBuffer.push(mono);
+      app.pcmBufferedSamples += mono.length;
+      flushPcmSegment(false);
+    };
+    app.pcmSource.connect(app.pcmProcessor);
+    app.pcmProcessor.connect(app.pcmGain);
+    app.pcmGain.connect(context.destination);
+    log('已启用 Web Audio PCM 分段：每段输出独立 WAV，避免长音频只转第一句。', 'success');
+  }
+
+  function stopPcmSegmenter(flush = true) {
+    if (flush) {
+      try { flushPcmSegment(true); } catch (_) {}
+    }
+    if (app.pcmProcessor) {
+      try { app.pcmProcessor.disconnect(); } catch (_) {}
+      app.pcmProcessor.onaudioprocess = null;
+    }
+    if (app.pcmSource) {
+      try { app.pcmSource.disconnect(); } catch (_) {}
+    }
+    if (app.pcmGain) {
+      try { app.pcmGain.disconnect(); } catch (_) {}
+    }
+    if (app.pcmContext) {
+      try { app.pcmContext.close(); } catch (_) {}
+    }
+    app.pcmProcessor = null;
+    app.pcmSource = null;
+    app.pcmGain = null;
+    app.pcmContext = null;
+    clearPcmBuffer();
   }
 
   function startSegmentRecorder(sessionId) {
     if (sessionId !== app.segmentSessionId || !app.segmentCaptureStream) return;
-    const localParts = [];
-    const index = app.segmentIndex + 1;
-    app.segmentIndex = index;
-    const segmentStartOffset = Math.max(0, (Date.now() - app.captureStartedAt) / 1000);
-    const segmentStartedAt = Date.now();
-    const recorder = new MediaRecorder(app.segmentCaptureStream, { mimeType: app.segmentMime, audioBitsPerSecond: 32000 });
+    const recorder = new MediaRecorder(app.segmentCaptureStream, { mimeType: app.segmentMime, audioBitsPerSecond: 24000 });
     app.segmentRecorder = recorder;
     app.recorder = recorder;
-
     recorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) {
-        localParts.push(event.data);
         app.audioParts.push(event.data);
         app.chunks.push(event.data);
       }
@@ -716,38 +931,10 @@
       log('MediaRecorder 错误：' + (event.error ? event.error.message : '未知错误'), 'error');
     };
     recorder.onstop = () => {
-      clearTimeout(app.segmentTimer);
-      app.segmentTimer = null;
       if (sessionId !== app.segmentSessionId) return;
-      const duration = Math.max(0.05, (Date.now() - segmentStartedAt) / 1000);
-      const segmentEndOffset = Math.max(segmentStartOffset + duration, (Date.now() - app.captureStartedAt) / 1000);
-      if (localParts.length) {
-        enqueueSegment({
-          index,
-          start: segmentStartOffset,
-          end: segmentEndOffset,
-          duration,
-          blob: new Blob(localParts, { type: app.segmentMime || 'audio/webm' })
-        });
-      }
-      if (shouldContinueSegmenting()) {
-        startSegmentRecorder(sessionId);
-      } else {
-        finalizeSegmentCapture(sessionId);
-      }
+      finalizeSegmentCapture(sessionId);
     };
-
     recorder.start(1000);
-    const settings = currentSettings();
-    const segmentSeconds = Math.max(10, Number(settings.segmentSeconds) || 45);
-    let nextSeconds = segmentSeconds;
-    if (app.captureHardLimitSeconds > 0) {
-      const elapsed = (Date.now() - app.captureStartedAt) / 1000;
-      nextSeconds = Math.max(0.5, Math.min(segmentSeconds, app.captureHardLimitSeconds - elapsed));
-    }
-    app.segmentTimer = setTimeout(() => {
-      if (recorder.state !== 'inactive') recorder.stop();
-    }, nextSeconds * 1000);
   }
 
   function finalizeSegmentCapture(sessionId) {
@@ -759,6 +946,7 @@
     app.captureTimer = null;
     app.stopTimer = null;
     app.segmentTimer = null;
+    stopPcmSegmenter(true);
     const type = app.segmentMime || 'audio/webm';
     app.capturedBlob = new Blob(app.audioParts, { type });
     if (app.capturedUrl) URL.revokeObjectURL(app.capturedUrl);
@@ -774,8 +962,10 @@
     setButton('capture-stop-btn', false);
     setButton('download-audio-btn', app.capturedBlob.size > 0);
     setButton('transcribe-btn', app.capturedBlob.size > 0 || app.segmentQueue.length > 0);
+    setButton('download-txt-btn', Boolean(app.transcriptText));
+    updateOneClickButton();
     setProgress('audio', 100, '音频提取', '音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒，共 ' + app.capturedSegmentCount + ' 段。');
-    log('音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒，共 ' + app.capturedSegmentCount + ' 段。', 'success');
+    log('音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒，共 ' + app.capturedSegmentCount + ' 段；剩余分段会继续转写并追加到纯文本结果。', 'success');
     processSegmentQueue();
     finishSegmentTranscriptionIfDone();
   }
@@ -789,12 +979,15 @@
     app.audioParts = [];
     app.capturedBlob = null;
     app.captureStartedAt = Date.now();
+    app.captureBaseMediaTime = getCurrentMediaPositionSeconds();
+    app.capturePlaybackRate = applyCapturePlaybackRate();
     app.captureMode = modeLabel;
     app.segmentCaptureStream = audioStream;
     app.segmentMime = mime || 'audio/webm';
     app.segmentStopRequested = false;
+    app.oneClickAwaitingTabCapture = false;
     const hardLimitSeconds = Number(seconds) || 0;
-    const targetSeconds = hardLimitSeconds > 0 ? hardLimitSeconds : (Number(expectedSeconds) || 0);
+    const targetSeconds = hardLimitSeconds > 0 ? hardLimitSeconds * (app.capturePlaybackRate || 1) : (Number(expectedSeconds) || 0);
     app.captureHardLimitSeconds = hardLimitSeconds;
     app.captureTargetSeconds = targetSeconds;
 
@@ -810,15 +1003,17 @@
     setButton('capture-stop-btn', true);
     const settings = currentSettings();
     const limitText = hardLimitSeconds > 0
-      ? '0.0 / ' + hardLimitSeconds + ' 秒'
-      : (targetSeconds > 0 ? '0.0 / 全长约 ' + targetSeconds.toFixed(1) + ' 秒' : '0.0 秒 / 全长或手动停止');
-    setProgress('audio', 0, '音频提取', '正在捕获音频：' + limitText + '。分段长度：' + settings.segmentSeconds + ' 秒。');
+      ? '0.0 / 约 ' + (hardLimitSeconds * (app.capturePlaybackRate || 1)).toFixed(1) + ' 秒视频'
+      : (targetSeconds > 0 ? '0.0 / 全长约 ' + targetSeconds.toFixed(1) + ' 秒视频' : '0.0 秒视频 / 全长或手动停止');
+    setProgress('audio', 0, '音频提取', '正在捕获音频：' + limitText + '。分段长度：' + settings.segmentSeconds + ' 秒，播放倍速：' + app.capturePlaybackRate + 'x。');
     setProgress('asr', 0, 'ASR 分段识别', '模型预热后会边录边识别，每完成一段就追加到结果。');
-    log('开始' + modeLabel + '，' + (hardLimitSeconds > 0 ? '最长 ' + hardLimitSeconds + ' 秒' : '不按秒数截断，直到视频结束或手动停止') + '，录制格式：' + app.segmentMime + '，分段 ' + settings.segmentSeconds + ' 秒。');
+    log('开始' + modeLabel + '，' + (hardLimitSeconds > 0 ? '最长 ' + hardLimitSeconds + ' 秒' : '不按秒数截断，直到视频结束或手动停止') + '，录制格式：' + app.segmentMime + '，分段 ' + settings.segmentSeconds + ' 秒，播放倍速 ' + app.capturePlaybackRate + 'x。');
     scheduleWarmup(50);
+    await startPcmSegmenter(audioStream);
     startCaptureTimer(targetSeconds, hardLimitSeconds);
     if (hardLimitSeconds > 0) app.stopTimer = setTimeout(() => stopCapture(), hardLimitSeconds * 1000);
     startSegmentRecorder(sessionId);
+    updateOneClickButton();
   }
 
   async function startCapture() {
@@ -1122,14 +1317,17 @@
 
   function makeTranscribeOptions(settings) {
     const baseOptions = languageOptions(settings.language);
+    const stabilityOptions = {
+      condition_on_previous_text: false
+    };
     if (settings.timestampMode === 'accurate') {
       return Object.assign({
         return_timestamps: true,
-        chunk_length_s: 20,
-        stride_length_s: 3
-      }, baseOptions);
+        chunk_length_s: 15,
+        stride_length_s: 2
+      }, stabilityOptions, baseOptions);
     }
-    return Object.assign({}, baseOptions);
+    return Object.assign({}, stabilityOptions, baseOptions);
   }
 
   function appendSegmentTranscript(segment, output, settings) {
@@ -1152,6 +1350,11 @@
 
     if (text) {
       app.transcriptText = app.transcriptText ? (app.transcriptText + '\n' + text) : text;
+      if (settings.language === 'auto' && app.transcribedSegmentCount === 0) {
+        const hasCjk = /[\u3400-\u9fff]/.test(text);
+        const hasLatin = /[A-Za-z]/.test(text);
+        log('首段语言输出检测：' + (hasCjk ? '包含中文' : hasLatin ? '主要为英文/拉丁字符' : '未检测到明显中英文字符') + '。自动模式会保持原文转写；如果语言判断错误，请切换为“强制中文原文”或“强制英文原文”后重跑。');
+      }
     }
     app.segmentResults.push(...srtChunks);
     app.transcriptSrt = chunksToSrt(app.segmentResults, app.transcriptText);
@@ -1159,6 +1362,7 @@
     $('srt-output').value = app.transcriptSrt;
     setButton('download-txt-btn', Boolean(app.transcriptText));
     setButton('download-srt-btn', Boolean(app.transcriptSrt));
+    updateOneClickButton();
   }
 
   function finishSegmentTranscriptionIfDone() {
@@ -1178,6 +1382,7 @@
       setProgress('asr', 100, '转文字完成', '已完成 ' + app.transcribedSegmentCount + ' / ' + app.capturedSegmentCount + ' 段，文本长度 ' + app.transcriptText.length + ' 字符。');
       setProgress('overall', 100, '完成', '音频捕获和分段转文字完成。');
       log('分段转文字完成：' + app.transcribedSegmentCount + ' / ' + app.capturedSegmentCount + ' 段，文本长度 ' + app.transcriptText.length + ' 字符。', 'success');
+      updateOneClickButton();
     }
   }
 
@@ -1293,7 +1498,68 @@
     log('已触发 SRT 下载。', 'success');
   }
 
+  function updateOneClickButton() {
+    const btn = $('one-click-btn');
+    if (!btn) return;
+    const active = app.recorder && app.recorder.state !== 'inactive';
+    btn.disabled = false;
+    if (active) {
+      btn.textContent = '停止捕获并完成转文字';
+      btn.className = 'btn btn-dark';
+      return;
+    }
+    if (app.oneClickAwaitingTabCapture) {
+      btn.textContent = '授权捕获当前标签页音频并转文字';
+      btn.className = 'btn btn-amber';
+      return;
+    }
+    if (app.segmentProcessing || app.segmentQueue.length) {
+      btn.textContent = '正在转写，点击可重新开始';
+      btn.className = 'btn btn-primary';
+      return;
+    }
+    if (app.transcriptText) {
+      btn.textContent = '重新开始检测、捕获并转文字';
+      btn.className = 'btn btn-green';
+      return;
+    }
+    btn.textContent = '开始检测、捕获并转文字';
+    btn.className = 'btn btn-green';
+  }
+
+  async function runOneClick() {
+    const active = app.recorder && app.recorder.state !== 'inactive';
+    if (active) {
+      stopCapture();
+      updateOneClickButton();
+      return;
+    }
+    const input = ($('source-url')?.value || '').trim();
+    if (!input) {
+      alert('请输入 YouTube 链接、视频直链或音频直链。');
+      return;
+    }
+    if (app.oneClickAwaitingTabCapture && app.currentKind === 'youtube' && app.currentUrl === input) {
+      await startTabCapture();
+      updateOneClickButton();
+      return;
+    }
+    const info = classifyUrl(input);
+    if (info.kind === 'youtube') {
+      await inspect(false);
+      app.oneClickAwaitingTabCapture = true;
+      updateOneClickButton();
+      await startTabCapture();
+      updateOneClickButton();
+      return;
+    }
+    app.oneClickAwaitingTabCapture = false;
+    await inspect(true);
+    updateOneClickButton();
+  }
+
   function wire() {
+    $('one-click-btn')?.addEventListener('click', () => runOneClick());
     $('inspect-btn')?.addEventListener('click', () => inspect(false));
     $('auto-btn')?.addEventListener('click', () => inspect(true));
     $('capture-start-btn')?.addEventListener('click', () => startCapture());
@@ -1304,8 +1570,9 @@
     $('download-audio-btn')?.addEventListener('click', () => downloadAudio());
     $('download-txt-btn')?.addEventListener('click', () => downloadTxt());
     $('download-srt-btn')?.addEventListener('click', () => downloadSrt());
-    ['language-select', 'model-select'].forEach((id) => {
+    ['language-select', 'model-select', 'playback-rate'].forEach((id) => {
       $(id)?.addEventListener('change', () => {
+        if (id === 'playback-rate') { log('捕获播放倍速已变化，下一次捕获生效。'); return; }
         log('识别设置已变化，将预热新模型。');
         scheduleWarmup(250);
       });
@@ -1323,6 +1590,7 @@
     setButton('capture-start-btn', false);
     setButton('capture-tab-btn', false);
     setButton('capture-stop-btn', false);
+    updateOneClickButton();
     registerServiceWorker().finally(() => scheduleWarmup(1200));
   }
 
