@@ -38,6 +38,7 @@
           <span class="badge">纯前端页面</span>
           <span class="badge">Chrome 桌面端优先</span>
           <span class="badge">极速文本优先</span>
+          <span class="badge">模型预热缓存</span>
           <span class="badge">TXT / SRT 导出</span>
         </div>
       </div>
@@ -97,6 +98,7 @@
           <div class="actions">
             <button id="inspect-btn" class="btn btn-primary" type="button">检测链接并尝试播放</button>
             <button id="auto-btn" class="btn btn-green" type="button">检测后自动捕获并转文字</button>
+            <button id="prewarm-btn" class="btn btn-outline" type="button">预热模型缓存</button>
             <button id="capture-start-btn" class="btn btn-amber" type="button">开始捕获媒体音频</button>
             <button id="capture-tab-btn" class="btn btn-amber" type="button">捕获当前标签页音频</button>
             <button id="capture-stop-btn" class="btn btn-dark" type="button">停止并识别</button>
@@ -139,7 +141,7 @@
             <div class="progress-box">
               <div class="progress-top"><span id="asr-label">ASR 识别</span><span id="asr-percent">0%</span></div>
               <div class="track"><div id="asr-bar" class="bar"></div></div>
-              <p id="asr-detail" class="subtle" style="margin:8px 0 0;font-size:13px">等待捕获完成。</p>
+              <p id="asr-detail" class="subtle" style="margin:8px 0 0;font-size:13px">等待捕获完成；模型会在后台预热缓存。</p>
             </div>
           </div>
 
@@ -185,6 +187,7 @@
           <div class="panel-inner">
             <h3>当前规则</h3>
             <div class="kv" style="margin-top:14px"><strong>YouTube</strong><span>检测连接、可操作、可播放；通过浏览器授权捕获当前标签页音频后本地转文字。</span></div>
+            <div class="kv"><strong>模型缓存</strong><span>页面启动后会后台预热当前 Tiny 模型，并用 Service Worker / 浏览器缓存减少重复下载。</span></div>
             <div class="kv"><strong>媒体直链</strong><span>尝试播放、captureStream 捕获、MediaRecorder 封装音频、本地 Whisper 转文字。</span></div>
             <div class="kv"><strong>普通网页</strong><span>不能直接拆出视频音频；需要真实媒体链接或服务端解析。</span></div>
           </div>

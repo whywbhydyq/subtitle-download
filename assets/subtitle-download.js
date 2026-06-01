@@ -45,7 +45,11 @@
     transcriber: null,
     transcriberKey: '',
     transcriberCache: new Map(),
+    transcriberPromises: new Map(),
     isTranscribing: false,
+    isWarmingModel: false,
+    warmupTimer: null,
+    serviceWorkerReady: false,
     asrRunId: 0
   };
 
@@ -72,6 +76,23 @@
     if (!box) return;
     box.dataset.empty = 'true';
     box.innerHTML = '<div class="line">[等待] 粘贴链接后点击“检测链接并尝试播放”。</div>';
+  }
+
+
+  async function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) {
+      log('当前浏览器不支持 Service Worker，模型只能依赖浏览器默认缓存。', 'warn');
+      return;
+    }
+    try {
+      const registration = await navigator.serviceWorker.register('sw.js');
+      await navigator.serviceWorker.ready;
+      app.serviceWorkerReady = true;
+      log('离线缓存服务已就绪：模型文件会尽量持久缓存，避免每次重复下载。', 'success');
+      if (registration && registration.update) registration.update().catch(() => {});
+    } catch (error) {
+      log('离线缓存服务注册失败：' + error.message, 'warn');
+    }
   }
 
   function setStatus(id, text, state = 'pending') {
@@ -102,7 +123,7 @@
   function resetProgress() {
     setProgress('overall', 0, '总进度', '等待检测。');
     setProgress('audio', 0, '音频提取', '等待捕获。');
-    setProgress('asr', 0, 'ASR 识别', '等待捕获完成。');
+    setProgress('asr', 0, 'ASR 识别', '等待捕获完成；模型会在后台预热缓存。');
   }
 
   function formatBytes(bytes) {
@@ -609,6 +630,7 @@
     setButton('capture-stop-btn', true);
     setProgress('audio', 0, '音频提取', '正在捕获音频：0.0 / ' + seconds + ' 秒。');
     log('开始' + modeLabel + '，最长 ' + seconds + ' 秒，录制格式：' + mime + '。');
+    scheduleWarmup(150);
     startCaptureTimer(seconds);
     app.stopTimer = setTimeout(() => stopCapture(), seconds * 1000);
   }
@@ -656,6 +678,7 @@
     const mime = pickAudioMime();
     if (!mime) { alert('没有可用音频录制编码。'); return; }
     stopDisplayCaptureTracks();
+    scheduleWarmup(50);
 
     log('即将请求浏览器授权：请选择“当前标签页/This Tab”，并勾选“共享标签页音频/Share tab audio”。', 'warn');
     setStatus('check-capture', '等待浏览器授权', 'pending');
@@ -727,8 +750,19 @@
     return MODEL_MAP[settings.model + ':' + settings.language] || MODEL_MAP['tiny:auto'];
   }
 
+  function configureTransformers(mod) {
+    if (!mod || !mod.env) return;
+    try { mod.env.allowRemoteModels = true; } catch (_) {}
+    try { mod.env.allowLocalModels = false; } catch (_) {}
+    try { mod.env.useBrowserCache = true; } catch (_) {}
+    try { mod.env.useFSCache = false; } catch (_) {}
+  }
+
   async function loadTransformers(runId) {
-    if (window.__subtitleDownloadTransformers) return window.__subtitleDownloadTransformers;
+    if (window.__subtitleDownloadTransformers) {
+      configureTransformers(window.__subtitleDownloadTransformers);
+      return window.__subtitleDownloadTransformers;
+    }
     const urls = [
       'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.0/dist/transformers.min.js',
       'https://unpkg.com/@huggingface/transformers@3.7.0/dist/transformers.min.js'
@@ -741,6 +775,7 @@
           log('加载识别运行库：' + url);
         }
         const mod = await import(url);
+        configureTransformers(mod);
         window.__subtitleDownloadTransformers = mod;
         return mod;
       } catch (error) {
@@ -766,38 +801,61 @@
           app.transcriber = app.transcriberCache.get(key);
           app.transcriberKey = key;
           if (runId === app.asrRunId) {
-            setProgress('asr', 35, 'ASR 模型已缓存', '复用已加载模型：' + model + ' / ' + device + '。');
-            log('复用已加载模型：' + model + '；设备：' + device + '。', 'success');
+            setProgress('asr', 35, 'ASR 模型已预热', '复用内存模型：' + model + ' / ' + device + '。');
+            log('复用内存模型：' + model + '；设备：' + device + '。', 'success');
           }
           return app.transcriber;
         }
 
-        try {
+        if (app.transcriberPromises.has(key)) {
           if (runId === app.asrRunId) {
-            setProgress('asr', 10, '模型加载', '正在加载模型：' + model + '（' + device + '）。首次使用会下载模型文件。');
-            setProgress('overall', 74, 'ASR 模型加载', '准备加载识别模型。');
-            log('加载模型：' + model + '；设备：' + device + '。');
+            setProgress('asr', 18, 'ASR 模型预热中', '已有同模型加载任务，正在复用，不会重复下载。');
+            log('复用正在进行的模型加载任务：' + key + '。');
           }
-          const pipe = await mod.pipeline('automatic-speech-recognition', model, {
-            device,
-            progress_callback: (data) => {
-              if (runId !== app.asrRunId || !data) return;
-              if (data.status === 'progress' && typeof data.progress === 'number') {
-                const pct = Math.max(0, Math.min(100, data.progress));
-                const scaled = 10 + pct * 0.25;
-                setProgress('asr', scaled, '模型下载', '正在下载模型文件：' + Math.round(pct) + '%。');
-                setProgress('overall', 74 + pct * 0.08, '模型下载', '模型文件下载中。');
-              } else if (data.status === 'ready') {
-                setProgress('asr', 35, '模型加载', '模型已加载，准备识别。');
-                log('模型已加载。', 'success');
-              }
-            }
-          });
-          app.transcriberCache.set(key, pipe);
+          const pipe = await app.transcriberPromises.get(key);
           app.transcriber = pipe;
           app.transcriberKey = key;
-          if (runId === app.asrRunId) setProgress('asr', 35, '模型加载', '模型已加载，准备识别。');
           return pipe;
+        }
+
+        const loadPromise = (async () => {
+          try {
+            if (runId === app.asrRunId) {
+              setProgress('asr', 10, '模型缓存/预热', '正在加载模型：' + model + '（' + device + '）。首次打开会下载；之后优先走浏览器缓存。');
+              setProgress('overall', 74, 'ASR 模型加载', '准备加载识别模型。');
+              log('加载模型：' + model + '；设备：' + device + '。');
+            }
+            const pipe = await mod.pipeline('automatic-speech-recognition', model, {
+              device,
+              progress_callback: (data) => {
+                if (runId !== app.asrRunId || !data) return;
+                if (data.status === 'progress' && typeof data.progress === 'number') {
+                  const pct = Math.max(0, Math.min(100, data.progress));
+                  const scaled = 10 + pct * 0.25;
+                  setProgress('asr', scaled, '模型缓存/下载', '正在缓存模型文件：' + Math.round(pct) + '%。已缓存后同浏览器不会重复下载。');
+                  setProgress('overall', 74 + pct * 0.08, '模型缓存/下载', '模型文件缓存中。');
+                } else if (data.status === 'ready') {
+                  setProgress('asr', 35, '模型已预热', '模型已加载到内存，并写入浏览器缓存。');
+                  log('模型已预热。', 'success');
+                }
+              }
+            });
+            app.transcriberCache.set(key, pipe);
+            app.transcriber = pipe;
+            app.transcriberKey = key;
+            try { localStorage.setItem('subtitle-download:last-model-key', key); } catch (_) {}
+            if (runId === app.asrRunId) setProgress('asr', 35, '模型已预热', '模型已加载；后续同模型会直接复用。');
+            return pipe;
+          } catch (error) {
+            throw error;
+          } finally {
+            app.transcriberPromises.delete(key);
+          }
+        })();
+
+        app.transcriberPromises.set(key, loadPromise);
+        try {
+          return await loadPromise;
         } catch (error) {
           lastError = error;
           log('模型加载失败，尝试下一个候选：' + model + ' / ' + device + '：' + error.message, 'warn');
@@ -805,6 +863,32 @@
       }
     }
     throw lastError || new Error('模型加载失败。');
+  }
+
+  async function warmupModel(reason = 'auto') {
+    if (app.isTranscribing || app.isWarmingModel) return;
+    app.isWarmingModel = true;
+    const runId = app.asrRunId;
+    try {
+      setProgress('asr', 2, '模型预热', reason === 'manual' ? '正在手动预热模型缓存。' : '正在后台预热模型缓存，捕获结束后可直接识别。');
+      log((reason === 'manual' ? '手动' : '后台') + '预热 ASR 模型。');
+      await ensureTranscriber(runId);
+      if (runId === app.asrRunId && !app.isTranscribing) {
+        setProgress('asr', 35, '模型已预热', '当前模型已在内存/浏览器缓存中；再次识别不会重复下载。');
+      }
+    } catch (error) {
+      if (!app.isTranscribing) {
+        setProgress('asr', 0, '模型预热失败', '稍后识别时会重试：' + error.message);
+      }
+      log('模型预热失败：' + error.message, 'warn');
+    } finally {
+      app.isWarmingModel = false;
+    }
+  }
+
+  function scheduleWarmup(delay = 900) {
+    clearTimeout(app.warmupTimer);
+    app.warmupTimer = setTimeout(() => warmupModel('auto'), delay);
   }
 
   function secondsToSrtTime(seconds) {
@@ -966,10 +1050,17 @@
     $('capture-start-btn')?.addEventListener('click', () => startCapture());
     $('capture-tab-btn')?.addEventListener('click', () => startTabCapture());
     $('capture-stop-btn')?.addEventListener('click', () => stopCapture());
+    $('prewarm-btn')?.addEventListener('click', () => warmupModel('manual'));
     $('transcribe-btn')?.addEventListener('click', () => transcribe());
     $('download-audio-btn')?.addEventListener('click', () => downloadAudio());
     $('download-txt-btn')?.addEventListener('click', () => downloadTxt());
     $('download-srt-btn')?.addEventListener('click', () => downloadSrt());
+    ['language-select', 'model-select'].forEach((id) => {
+      $(id)?.addEventListener('change', () => {
+        log('识别设置已变化，将预热新模型。');
+        scheduleWarmup(250);
+      });
+    });
     document.querySelectorAll('[data-example]').forEach((button) => {
       button.addEventListener('click', () => {
         const input = $('source-url');
@@ -983,6 +1074,7 @@
     setButton('capture-start-btn', false);
     setButton('capture-tab-btn', false);
     setButton('capture-stop-btn', false);
+    registerServiceWorker().finally(() => scheduleWarmup(1200));
   }
 
   document.addEventListener('DOMContentLoaded', wire);
