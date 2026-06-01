@@ -252,9 +252,9 @@
                 <section class="lg:col-span-7 bg-white dark:bg-gray-900 rounded-3xl p-8 shadow-xl">
                     <div class="flex items-start justify-between gap-4 mb-6">
                         <div>
-                            <h2 class="text-2xl font-semibold mb-2">链接音频提取与文字/SRT生成</h2>
+                            <h2 class="text-2xl font-semibold mb-2">链接检测、音频提取与文字/SRT生成</h2>
                             <p class="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
-                                输入可跨域访问的 M3U8、MP4、WebM、MP3、WAV 等直链；浏览器先播放并捕获音频，再用本地 Whisper 模型生成文本和 SRT 字幕。
+                                输入 YouTube 页面链接、M3U8、MP4、WebM、MP3、WAV 等链接后，页面会立即反馈：链接类型、能否连接、能否控制、能否播放、能否捕获音频，以及音频捕获和转文字进度。
                             </p>
                         </div>
                         <span class="shrink-0 text-xs px-3 py-1 rounded-full bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300">本地识别</span>
@@ -262,10 +262,10 @@
 
                     <div class="space-y-5">
                         <div>
-                            <label class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">媒体链接</label>
+                            <label class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">视频/音频链接</label>
                             <input id="transcribe-url" type="text"
                                    class="w-full px-5 py-4 bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-2xl focus:outline-none focus:border-blue-500 font-mono text-sm"
-                                   placeholder="https://example.com/video.m3u8 或 https://example.com/video.mp4">
+                                   placeholder="https://www.youtube.com/watch?v=... 或 https://example.com/video.m3u8">
                         </div>
 
                         <div class="grid md:grid-cols-3 gap-4">
@@ -286,34 +286,68 @@
                                 </select>
                             </div>
                             <div>
-                                <label class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">最长捕获</label>
-                                <input id="capture-seconds" type="number" min="10" max="1800" value="120"
+                                <label class="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">最长捕获 / 秒</label>
+                                <input id="capture-seconds" type="number" min="5" max="1800" value="60"
                                        class="w-full px-4 py-3 border border-gray-300 dark:border-gray-700 rounded-2xl bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100">
                             </div>
                         </div>
 
-                        <div class="rounded-2xl overflow-hidden bg-black border border-gray-200 dark:border-gray-800">
-                            <video id="asr-video" controls crossorigin="anonymous" class="w-full max-h-[360px] bg-black"></video>
-                        </div>
-
-                        <div class="grid md:grid-cols-4 gap-3">
-                            <button onclick="loadTranscriptMedia()" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-2xl transition-colors">加载链接</button>
+                        <div class="grid md:grid-cols-2 gap-3">
+                            <button onclick="inspectAndLoadTranscriptMedia()" id="inspect-load-btn" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-2xl transition-colors">检测链接并尝试播放</button>
                             <button onclick="startTranscriptCapture()" id="capture-start-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 rounded-2xl transition-colors">开始捕获音频</button>
                             <button onclick="stopTranscriptCapture()" id="capture-stop-btn" class="bg-gray-800 hover:bg-gray-900 text-white font-semibold py-3 rounded-2xl transition-colors" disabled>停止并识别</button>
                             <button onclick="transcribeCapturedAudio()" id="transcribe-btn" class="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold py-3 rounded-2xl transition-colors" disabled>重新识别</button>
                         </div>
 
-                        <div id="asr-progress" class="hidden">
+                        <div id="asr-progress" class="hidden space-y-2">
+                            <div class="flex justify-between text-xs text-gray-500 dark:text-gray-400">
+                                <span id="asr-phase-label">等待处理</span>
+                                <span id="asr-percent-label">0%</span>
+                            </div>
                             <div class="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                                 <div id="asr-progress-bar" class="h-2 bg-emerald-500 w-0 transition-all duration-300"></div>
                             </div>
                             <p id="asr-status" class="text-center text-sm mt-3 text-gray-500">等待处理...</p>
                         </div>
 
+                        <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-3" id="asr-check-grid">
+                            <div class="rounded-2xl border border-gray-200 dark:border-gray-800 p-4 bg-gray-50 dark:bg-gray-950">
+                                <div class="text-xs text-gray-500 mb-1">链接类型</div>
+                                <div id="check-type" class="text-sm font-semibold">未检测</div>
+                            </div>
+                            <div class="rounded-2xl border border-gray-200 dark:border-gray-800 p-4 bg-gray-50 dark:bg-gray-950">
+                                <div class="text-xs text-gray-500 mb-1">连接</div>
+                                <div id="check-connect" class="text-sm font-semibold">未检测</div>
+                            </div>
+                            <div class="rounded-2xl border border-gray-200 dark:border-gray-800 p-4 bg-gray-50 dark:bg-gray-950">
+                                <div class="text-xs text-gray-500 mb-1">可操作</div>
+                                <div id="check-control" class="text-sm font-semibold">未检测</div>
+                            </div>
+                            <div class="rounded-2xl border border-gray-200 dark:border-gray-800 p-4 bg-gray-50 dark:bg-gray-950">
+                                <div class="text-xs text-gray-500 mb-1">可播放/捕获</div>
+                                <div id="check-play-capture" class="text-sm font-semibold">未检测</div>
+                            </div>
+                        </div>
+
+                        <div id="asr-video-panel" class="rounded-2xl overflow-hidden bg-black border border-gray-200 dark:border-gray-800">
+                            <video id="asr-video" controls crossorigin="anonymous" class="w-full max-h-[360px] bg-black"></video>
+                        </div>
+
+                        <div id="yt-panel" class="hidden rounded-2xl overflow-hidden border border-gray-200 dark:border-gray-800 bg-black">
+                            <div id="yt-player" class="w-full aspect-video"></div>
+                        </div>
+
                         <div class="grid sm:grid-cols-3 gap-3">
                             <button onclick="downloadCapturedAudio()" id="download-audio-btn" class="px-5 py-3 border border-gray-300 dark:border-gray-700 rounded-2xl text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800" disabled>下载音频</button>
                             <button onclick="downloadTranscriptText()" id="download-txt-btn" class="px-5 py-3 border border-gray-300 dark:border-gray-700 rounded-2xl text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800" disabled>下载 TXT</button>
                             <button onclick="downloadTranscriptSrt()" id="download-srt-btn" class="px-5 py-3 border border-gray-300 dark:border-gray-700 rounded-2xl text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-800" disabled>下载 SRT</button>
+                        </div>
+
+                        <div class="rounded-3xl border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-950 p-5">
+                            <h3 class="font-semibold mb-3">实时诊断日志</h3>
+                            <div id="asr-diagnostics-log" class="log text-gray-700 dark:text-gray-300 max-h-56 overflow-y-auto font-mono text-xs leading-relaxed">
+                                [等待] 粘贴链接后点击“检测链接并尝试播放”。
+                            </div>
                         </div>
                     </div>
                 </section>
@@ -330,12 +364,12 @@
                     </div>
 
                     <div class="text-xs text-gray-500 dark:text-gray-400 bg-amber-50 dark:bg-amber-950/30 p-5 rounded-3xl leading-relaxed">
-                        <strong class="text-amber-600 block mb-2">链接要求</strong>
+                        <strong class="text-amber-600 block mb-2">关键限制</strong>
                         <ul class="space-y-2">
-                            <li>• 支持媒体直链或 M3U8 链接；普通网页链接通常不能被纯前端页面直接解析。</li>
-                            <li>• 源站必须允许 CORS，否则浏览器无法播放、捕获或下载音频。</li>
-                            <li>• 首次识别会下载 Whisper 模型，之后浏览器会缓存模型文件。</li>
-                            <li>• 音频捕获基于播放流，长视频建议分段捕获识别。</li>
+                            <li>• MP4、M3U8、MP3、WAV 等媒体直链可被页面尝试播放、捕获和识别。</li>
+                            <li>• YouTube 页面链接可用官方播放器检测“能否嵌入、能否操作、能否播放”，但 iframe 跨源音频不能被纯前端页面捕获给 ASR。</li>
+                            <li>• 源站必须允许 CORS；否则浏览器会阻止读取、捕获或下载音频。</li>
+                            <li>• 转文字进度为模型下载的真实进度 + 识别阶段的耗时估算；浏览器端 Whisper 不稳定提供逐词进度回调。</li>
                         </ul>
                     </div>
                 </aside>
@@ -686,25 +720,74 @@
         };
     </script>
 
-    <script type="module">
-        import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1';
+    <script>
+        let transformersModulePromise = null;
+        let youtubeApiPromise = null;
+        let ytPlayer = null;
+        let ytPlayerHostCounter = 0;
 
-        env.allowRemoteModels = true;
-        env.allowLocalModels = false;
-        if (env.backends && env.backends.onnx && env.backends.onnx.wasm) {
-            env.backends.onnx.wasm.numThreads = Math.max(1, Math.min(4, navigator.hardwareConcurrency || 2));
+        async function loadTransformersModule() {
+            if (!transformersModulePromise) {
+                transformersModulePromise = import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1')
+                    .then(function(mod) {
+                        if (mod.env) {
+                            mod.env.allowRemoteModels = true;
+                            mod.env.allowLocalModels = false;
+                            if (mod.env.backends && mod.env.backends.onnx && mod.env.backends.onnx.wasm) {
+                                mod.env.backends.onnx.wasm.numThreads = Math.max(1, Math.min(4, navigator.hardwareConcurrency || 2));
+                            }
+                        }
+                        return mod;
+                    })
+                    .catch(function(error) {
+                        transformersModulePromise = null;
+                        throw new Error('识别模型库加载失败：' + error.message + '。请检查网络是否能访问 jsdelivr 和 Hugging Face。');
+                    });
+            }
+            return transformersModulePromise;
+        }
+
+        function loadYouTubeApi() {
+            if (window.YT && window.YT.Player) return Promise.resolve(window.YT);
+            if (youtubeApiPromise) return youtubeApiPromise;
+            youtubeApiPromise = new Promise(function(resolve, reject) {
+                const previousReady = window.onYouTubeIframeAPIReady;
+                window.onYouTubeIframeAPIReady = function() {
+                    if (typeof previousReady === 'function') previousReady();
+                    resolve(window.YT);
+                };
+                const script = document.createElement('script');
+                script.src = 'https://www.youtube.com/iframe_api';
+                script.async = true;
+                script.onerror = function() {
+                    youtubeApiPromise = null;
+                    reject(new Error('YouTube IFrame API 加载失败'));
+                };
+                document.head.appendChild(script);
+                setTimeout(function() {
+                    if (!(window.YT && window.YT.Player)) {
+                        reject(new Error('YouTube IFrame API 超时，可能被网络或浏览器扩展拦截'));
+                    }
+                }, 15000);
+            });
+            return youtubeApiPromise;
         }
 
         let asrHls = null;
         let asrRecorder = null;
         let asrChunks = [];
         let asrStopTimer = null;
+        let asrCaptureTimer = null;
+        let asrStartedAt = 0;
+        let asrCapturedSeconds = 0;
+        let asrTranscribeTimer = null;
         let capturedAudioBlob = null;
         let capturedAudioUrl = null;
         let transcriptText = '';
         let transcriptSrt = '';
         let transcriber = null;
         let transcriberKey = '';
+        let currentInputKind = 'unknown';
 
         const ASR_MODEL_MAP = {
             'tiny:auto': 'onnx-community/whisper-tiny',
@@ -718,23 +801,140 @@
             'base:en': 'onnx-community/whisper-base.en'
         };
 
-        function setAsrStatus(message, progress) {
-            const container = document.getElementById('asr-progress');
-            const bar = document.getElementById('asr-progress-bar');
-            const status = document.getElementById('asr-status');
+        const YT_STATE_LABELS = {
+            '-1': '未开始',
+            '0': '已结束',
+            '1': '播放中',
+            '2': '已暂停',
+            '3': '缓冲中',
+            '5': '视频已准备'
+        };
+
+        function $(id) {
+            return document.getElementById(id);
+        }
+
+        function nowTime() {
+            return new Date().toLocaleTimeString('zh-CN', { hour12: false });
+        }
+
+        function addAsrLog(message, type) {
+            const box = $('asr-diagnostics-log');
+            if (!box) return;
+            const color = type === 'success' ? 'text-green-600 dark:text-green-400' : type === 'error' ? 'text-red-600 dark:text-red-400' : type === 'warn' ? 'text-amber-600 dark:text-amber-400' : 'text-gray-700 dark:text-gray-300';
+            const line = document.createElement('div');
+            line.className = color;
+            line.textContent = '[' + nowTime() + '] ' + message;
+            if (box.textContent.trim().startsWith('[等待]')) box.innerHTML = '';
+            box.appendChild(line);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function setCheck(id, text, state) {
+            const node = $(id);
+            if (!node) return;
+            node.textContent = text;
+            node.className = 'text-sm font-semibold ' + (
+                state === 'ok' ? 'text-green-600 dark:text-green-400' :
+                state === 'bad' ? 'text-red-600 dark:text-red-400' :
+                state === 'warn' ? 'text-amber-600 dark:text-amber-400' :
+                'text-gray-700 dark:text-gray-300'
+            );
+        }
+
+        function resetAsrDiagnostics() {
+            setCheck('check-type', '检测中', 'pending');
+            setCheck('check-connect', '等待', 'pending');
+            setCheck('check-control', '等待', 'pending');
+            setCheck('check-play-capture', '等待', 'pending');
+            const logBox = $('asr-diagnostics-log');
+            if (logBox) logBox.innerHTML = '';
+            setAsrStatus('开始检测链接...', 2, '链接检测');
+            addAsrLog('开始检测链接');
+        }
+
+        function setAsrStatus(message, progress, phase) {
+            const container = $('asr-progress');
+            const bar = $('asr-progress-bar');
+            const status = $('asr-status');
+            const percent = $('asr-percent-label');
+            const phaseLabel = $('asr-phase-label');
+            if (!container || !bar || !status) return;
             container.classList.remove('hidden');
             status.textContent = message;
+            if (phaseLabel && phase) phaseLabel.textContent = phase;
             if (typeof progress === 'number') {
-                bar.style.width = Math.max(0, Math.min(100, progress)) + '%';
+                const value = Math.max(0, Math.min(100, progress));
+                bar.style.width = value + '%';
+                if (percent) percent.textContent = Math.round(value) + '%';
             }
         }
 
         function setButtonState(id, enabled) {
-            const btn = document.getElementById(id);
+            const btn = $(id);
             if (!btn) return;
             btn.disabled = !enabled;
             btn.classList.toggle('opacity-50', !enabled);
             btn.classList.toggle('cursor-not-allowed', !enabled);
+        }
+
+        function parseYouTubeId(url) {
+            try {
+                const u = new URL(url);
+                const host = u.hostname.replace(/^www\./, '').toLowerCase();
+                if (host === 'youtu.be') return u.pathname.split('/').filter(Boolean)[0] || '';
+                if (host.endsWith('youtube.com') || host.endsWith('youtube-nocookie.com')) {
+                    if (u.searchParams.get('v')) return u.searchParams.get('v');
+                    const parts = u.pathname.split('/').filter(Boolean);
+                    const keys = ['embed', 'shorts', 'live'];
+                    if (keys.includes(parts[0]) && parts[1]) return parts[1];
+                }
+            } catch (_) {}
+            return '';
+        }
+
+        function analyzeInputUrl(url) {
+            const youtubeId = parseYouTubeId(url);
+            if (youtubeId) return { kind: 'youtube', youtubeId, label: 'YouTube 页面链接' };
+            let pathname = '';
+            try { pathname = new URL(url).pathname.toLowerCase(); } catch (_) {}
+            if (/\.m3u8$/i.test(pathname) || /m3u8/i.test(url)) return { kind: 'm3u8', label: 'M3U8/HLS 流' };
+            if (/\.(mp4|webm|mov|m4v|ogg|ogv)$/i.test(pathname)) return { kind: 'video', label: '视频直链' };
+            if (/\.(mp3|wav|m4a|aac|flac|opus)$/i.test(pathname)) return { kind: 'audio', label: '音频直链' };
+            return { kind: 'unknown', label: '未知链接/可能是网页' };
+        }
+
+        async function probeCorsFetch(url, kind) {
+            if (kind === 'youtube') return { ok: true, message: 'YouTube 链接将用 IFrame API 检测，不用 fetch 读取页面' };
+            try {
+                const response = await fetch(url, { method: kind === 'm3u8' ? 'GET' : 'HEAD', cache: 'no-store', mode: 'cors' });
+                if (!response.ok) return { ok: false, message: 'HTTP ' + response.status + ' ' + response.statusText };
+                if (kind === 'm3u8') {
+                    const text = await response.clone().text();
+                    if (!/^#EXTM3U/m.test(text.trim())) {
+                        return { ok: false, message: '能连接，但返回内容不像 M3U8 清单' };
+                    }
+                    const segments = (text.match(/#EXTINF/g) || []).length;
+                    return { ok: true, message: 'M3U8 清单可读，片段标记 ' + segments + ' 个' };
+                }
+                const contentType = response.headers.get('content-type') || '未知 Content-Type';
+                const len = response.headers.get('content-length');
+                return { ok: true, message: 'HTTP 可连接：' + contentType + (len ? '，' + formatBytes(Number(len)) : '') };
+            } catch (error) {
+                return { ok: false, message: 'fetch 被阻止或连接失败：' + error.message };
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB'];
+            let value = bytes;
+            let index = 0;
+            while (value >= 1024 && index < units.length - 1) {
+                value /= 1024;
+                index += 1;
+            }
+            return value.toFixed(index === 0 ? 0 : 2) + ' ' + units[index];
         }
 
         function getVideoCaptureStream(video) {
@@ -769,6 +969,306 @@
                 a.remove();
             }, 1000);
         }
+
+        function resetNativeMedia() {
+            const video = $('asr-video');
+            if (asrHls) {
+                asrHls.destroy();
+                asrHls = null;
+            }
+            if (video) {
+                video.pause();
+                video.removeAttribute('src');
+                video.load();
+            }
+        }
+
+        function showNativePanel() {
+            const videoPanel = $('asr-video-panel');
+            const ytPanel = $('yt-panel');
+            if (videoPanel) videoPanel.classList.remove('hidden');
+            if (ytPanel) ytPanel.classList.add('hidden');
+        }
+
+        function showYouTubePanel() {
+            const videoPanel = $('asr-video-panel');
+            const ytPanel = $('yt-panel');
+            if (videoPanel) videoPanel.classList.add('hidden');
+            if (ytPanel) ytPanel.classList.remove('hidden');
+        }
+
+        function clearAsrOutputs() {
+            revokeCapturedUrl();
+            capturedAudioBlob = null;
+            transcriptText = '';
+            transcriptSrt = '';
+            asrCapturedSeconds = 0;
+            if ($('transcript-output')) $('transcript-output').value = '';
+            if ($('srt-output')) $('srt-output').value = '';
+            ['download-audio-btn', 'download-txt-btn', 'download-srt-btn', 'transcribe-btn'].forEach(id => setButtonState(id, false));
+        }
+
+        function waitForMediaEvent(video, timeoutMs) {
+            if (video.readyState >= 1) return Promise.resolve({ ok: true, event: 'already-loaded' });
+            return new Promise(function(resolve) {
+                let done = false;
+                const finish = function(result) {
+                    if (done) return;
+                    done = true;
+                    clearTimeout(timer);
+                    video.removeEventListener('loadedmetadata', onMeta);
+                    video.removeEventListener('canplay', onCanplay);
+                    video.removeEventListener('error', onError);
+                    resolve(result);
+                };
+                const onMeta = function() { finish({ ok: true, event: 'loadedmetadata' }); };
+                const onCanplay = function() { finish({ ok: true, event: 'canplay' }); };
+                const onError = function() {
+                    const codeMap = { 1: '加载被中止', 2: '网络错误', 3: '解码失败', 4: '格式不支持或跨域受限' };
+                    const reason = video.error ? (codeMap[video.error.code] || ('错误码 ' + video.error.code)) : '未知错误';
+                    finish({ ok: false, event: 'error', reason });
+                };
+                const timer = setTimeout(function() { finish({ ok: false, event: 'timeout', reason: '媒体元数据加载超时' }); }, timeoutMs || 12000);
+                video.addEventListener('loadedmetadata', onMeta, { once: true });
+                video.addEventListener('canplay', onCanplay, { once: true });
+                video.addEventListener('error', onError, { once: true });
+            });
+        }
+
+        async function loadNativeMedia(url, kind) {
+            showNativePanel();
+            resetNativeMedia();
+            const video = $('asr-video');
+            if (!video) throw new Error('页面缺少 asr-video 元素');
+            video.onerror = function() {
+                const mediaError = video.error;
+                const codeMap = { 1: '加载被中止', 2: '网络错误', 3: '解码失败', 4: '格式不支持或跨域受限' };
+                const reason = mediaError ? (codeMap[mediaError.code] || ('错误码 ' + mediaError.code)) : '未知错误';
+                setCheck('check-play-capture', '播放失败', 'bad');
+                setAsrStatus('媒体加载失败：' + reason, 100, '播放检测');
+                addAsrLog('媒体加载失败：' + reason, 'error');
+            };
+
+            if (kind === 'm3u8') {
+                if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                    setCheck('check-control', 'hls.js 可用', 'ok');
+                    addAsrLog('hls.js 可用，开始解析 M3U8');
+                    asrHls = new Hls({ enableWorker: true, lowLatencyMode: false, backBufferLength: 30 });
+                    asrHls.loadSource(url);
+                    asrHls.attachMedia(video);
+                    await new Promise(function(resolve, reject) {
+                        let settled = false;
+                        const done = function(ok, value) {
+                            if (settled) return;
+                            settled = true;
+                            clearTimeout(timer);
+                            ok ? resolve(value) : reject(value);
+                        };
+                        const timer = setTimeout(function() { done(false, new Error('M3U8 清单解析超时')); }, 12000);
+                        asrHls.on(Hls.Events.MANIFEST_PARSED, function(_event, data) {
+                            const levels = data && data.levels ? data.levels.length : 0;
+                            addAsrLog('M3U8 清单解析成功，清晰度层级 ' + levels + ' 个', 'success');
+                            done(true, data);
+                        });
+                        asrHls.on(Hls.Events.ERROR, function(_event, data) {
+                            if (data && data.fatal) {
+                                done(false, new Error(data.details || data.type || 'M3U8 fatal error'));
+                            }
+                        });
+                    });
+                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    setCheck('check-control', '原生 HLS 可用', 'ok');
+                    video.src = url;
+                    video.load();
+                } else {
+                    throw new Error('当前浏览器没有 HLS 播放能力，且 hls.js 未加载');
+                }
+            } else {
+                setCheck('check-control', 'HTMLMediaElement 可控制', 'ok');
+                video.src = url;
+                video.load();
+            }
+
+            setAsrStatus('正在等待媒体元数据...', 20, '播放检测');
+            const metadata = await waitForMediaEvent(video, 12000);
+            if (!metadata.ok) throw new Error(metadata.reason || '媒体无法加载');
+            const duration = Number.isFinite(video.duration) ? video.duration.toFixed(1) + ' 秒' : '直播/未知时长';
+            addAsrLog('媒体元数据已加载：' + duration, 'success');
+
+            setAsrStatus('正在尝试播放媒体...', 30, '播放检测');
+            try {
+                await video.play();
+                setCheck('check-play-capture', '可播放，检测捕获中', 'ok');
+                addAsrLog('媒体 play() 成功', 'success');
+            } catch (error) {
+                setCheck('check-play-capture', '需手动播放', 'warn');
+                addAsrLog('浏览器阻止自动播放：请手动点播放器播放后再捕获。' + error.message, 'warn');
+                setAsrStatus('媒体已加载，但浏览器阻止自动播放。手动播放后可继续捕获。', 35, '播放检测');
+                return;
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 500));
+            const captureStream = getVideoCaptureStream(video);
+            if (!captureStream) {
+                setCheck('check-play-capture', '可播放，不支持捕获', 'warn');
+                addAsrLog('当前浏览器不支持 HTMLMediaElement.captureStream()', 'warn');
+                setAsrStatus('可播放，但当前浏览器不支持从媒体元素捕获音频。', 40, '捕获检测');
+                return;
+            }
+            const tracks = captureStream.getAudioTracks();
+            if (!tracks.length) {
+                setCheck('check-play-capture', '可播放，未检测到音轨', 'warn');
+                addAsrLog('captureStream 已创建，但没有音轨。可能是视频无声、未开始播放或跨域限制。', 'warn');
+                setAsrStatus('可播放，但未检测到可捕获音轨。', 40, '捕获检测');
+                return;
+            }
+            const mime = pickAudioMimeType();
+            if (!window.MediaRecorder || !mime) {
+                setCheck('check-play-capture', '有音轨，录制不支持', 'warn');
+                addAsrLog('检测到音轨，但 MediaRecorder 或可用音频编码不可用。', 'warn');
+                setAsrStatus('检测到音轨，但浏览器无法录制音频。', 40, '捕获检测');
+                return;
+            }
+            setCheck('check-play-capture', '可播放，可捕获音频', 'ok');
+            setAsrStatus('检测完成：可播放且可捕获音频。可以点击“开始捕获音频”。', 45, '检测完成');
+            addAsrLog('检测到 ' + tracks.length + ' 条音轨，录制格式：' + mime, 'success');
+        }
+
+        async function inspectYouTube(url, youtubeId) {
+            showYouTubePanel();
+            resetNativeMedia();
+            setCheck('check-connect', '加载官方播放器中', 'pending');
+            setCheck('check-control', '等待 API', 'pending');
+            setCheck('check-play-capture', '等待播放事件', 'pending');
+            setAsrStatus('检测到 YouTube 链接，正在加载官方 IFrame Player...', 10, 'YouTube 检测');
+            addAsrLog('YouTube 视频 ID：' + youtubeId);
+            addAsrLog('YouTube 链接不是媒体直链；页面将检测能否嵌入、能否控制和能否播放。音频捕获不会对 YouTube iframe 开启。', 'warn');
+
+            const ytHost = $('yt-player');
+            if (!ytHost) throw new Error('页面缺少 YouTube 播放容器');
+            if (ytPlayer && typeof ytPlayer.destroy === 'function') {
+                try { ytPlayer.destroy(); } catch (_) {}
+                ytPlayer = null;
+            }
+            ytPlayerHostCounter += 1;
+            const hostId = 'yt-player-' + ytPlayerHostCounter;
+            ytHost.innerHTML = '<div id="' + hostId + '" class="w-full aspect-video"></div>';
+
+            const YT = await loadYouTubeApi();
+            setCheck('check-connect', 'IFrame API 已连接', 'ok');
+            addAsrLog('YouTube IFrame API 已连接', 'success');
+
+            await new Promise(function(resolve, reject) {
+                let settled = false;
+                const timer = setTimeout(function() {
+                    if (!settled) {
+                        settled = true;
+                        reject(new Error('YouTube 播放器 ready 超时'));
+                    }
+                }, 15000);
+
+                ytPlayer = new YT.Player(hostId, {
+                    videoId: youtubeId,
+                    width: '100%',
+                    height: '360',
+                    playerVars: {
+                        playsinline: 1,
+                        origin: window.location.origin
+                    },
+                    events: {
+                        onReady: function(event) {
+                            if (settled) return;
+                            settled = true;
+                            clearTimeout(timer);
+                            setCheck('check-control', '可操作', 'ok');
+                            setAsrStatus('YouTube 播放器已 ready，正在尝试播放...', 25, 'YouTube 播放');
+                            addAsrLog('YouTube 播放器 ready，可通过 IFrame API 控制', 'success');
+                            try {
+                                const data = event.target.getVideoData ? event.target.getVideoData() : null;
+                                if (data && data.title) addAsrLog('视频标题：' + data.title, 'success');
+                            } catch (_) {}
+                            try { event.target.playVideo(); } catch (error) { addAsrLog('playVideo 调用失败：' + error.message, 'warn'); }
+                            resolve();
+                        },
+                        onStateChange: function(event) {
+                            const label = YT_STATE_LABELS[String(event.data)] || ('状态 ' + event.data);
+                            addAsrLog('YouTube 播放状态：' + label);
+                            if (event.data === YT.PlayerState.PLAYING) {
+                                setCheck('check-play-capture', '可播放，不可捕获', 'warn');
+                                setAsrStatus('YouTube 可播放，但 iframe 音频不能被纯前端捕获给 ASR。', 45, 'YouTube 播放');
+                            } else if (event.data === YT.PlayerState.BUFFERING) {
+                                setCheck('check-play-capture', '缓冲中', 'pending');
+                            } else if (event.data === YT.PlayerState.CUED) {
+                                setCheck('check-play-capture', '已载入，待播放', 'pending');
+                            }
+                        },
+                        onError: function(event) {
+                            const reason = 'YouTube 错误码 ' + event.data;
+                            setCheck('check-play-capture', '播放失败', 'bad');
+                            setAsrStatus(reason, 100, 'YouTube 播放');
+                            addAsrLog(reason, 'error');
+                        },
+                        onAutoplayBlocked: function() {
+                            setCheck('check-play-capture', '需手动播放', 'warn');
+                            setAsrStatus('浏览器阻止自动播放，请点击 YouTube 播放器开始播放。', 35, 'YouTube 播放');
+                            addAsrLog('浏览器阻止 YouTube 自动播放，请手动点击播放器。', 'warn');
+                        }
+                    }
+                });
+            });
+            addAsrLog('结论：该 YouTube 链接可以做播放诊断；若要音频转文字，请使用媒体直链、上传文件或接入合法的服务端转写管线。', 'warn');
+            setButtonState('capture-start-btn', false);
+        }
+
+        window.inspectAndLoadTranscriptMedia = async function() {
+            const url = $('transcribe-url').value.trim();
+            if (!url) { alert('请输入 YouTube 链接、媒体直链或 M3U8 链接'); return; }
+            window.switchTab(2);
+            resetAsrDiagnostics();
+            clearAsrOutputs();
+            setButtonState('inspect-load-btn', false);
+            setButtonState('capture-start-btn', false);
+            setButtonState('capture-stop-btn', false);
+
+            try {
+                const info = analyzeInputUrl(url);
+                currentInputKind = info.kind;
+                setCheck('check-type', info.label, info.kind === 'unknown' ? 'warn' : 'ok');
+                addAsrLog('链接类型：' + info.label);
+
+                if (info.kind === 'unknown') {
+                    setCheck('check-connect', '不确定', 'warn');
+                    setCheck('check-control', '不可直接控制', 'warn');
+                    setCheck('check-play-capture', '请换媒体直链', 'warn');
+                    setAsrStatus('这看起来不是媒体直链。普通网页不能被纯前端直接拆出视频/音频。', 100, '检测结束');
+                    addAsrLog('普通网页链接不能直接作为 <video> 源。请粘贴 MP4/M3U8/MP3/WAV 直链。', 'warn');
+                    return;
+                }
+
+                if (info.kind === 'youtube') {
+                    await inspectYouTube(url, info.youtubeId);
+                    return;
+                }
+
+                setAsrStatus('正在进行 CORS/HTTP 连接检测...', 8, '连接检测');
+                const probe = await probeCorsFetch(url, info.kind);
+                setCheck('check-connect', probe.ok ? '可连接' : '连接受限', probe.ok ? 'ok' : 'warn');
+                addAsrLog(probe.message, probe.ok ? 'success' : 'warn');
+                if (!probe.ok) {
+                    addAsrLog('继续尝试用播放器加载；但如果源站没有 CORS，音频捕获/下载通常会失败。', 'warn');
+                }
+                await loadNativeMedia(url, info.kind);
+                setButtonState('capture-start-btn', true);
+            } catch (error) {
+                setCheck('check-play-capture', '失败', 'bad');
+                setAsrStatus('检测失败：' + error.message, 100, '检测失败');
+                addAsrLog('检测失败：' + error.message, 'error');
+            } finally {
+                setButtonState('inspect-load-btn', true);
+            }
+        };
+
+        window.loadTranscriptMedia = window.inspectAndLoadTranscriptMedia;
 
         function secondsToSrtTime(seconds) {
             const safe = Math.max(0, Number(seconds) || 0);
@@ -807,8 +1307,8 @@
         }
 
         function getSelectedModel() {
-            const modelChoice = document.getElementById('asr-model').value;
-            const language = document.getElementById('asr-language').value;
+            const modelChoice = $('asr-model').value;
+            const language = $('asr-language').value;
             return ASR_MODEL_MAP[modelChoice + ':' + language] || 'onnx-community/whisper-tiny';
         }
 
@@ -817,15 +1317,24 @@
             const device = navigator.gpu ? 'webgpu' : 'wasm';
             const key = model + '@' + device;
             if (transcriber && transcriberKey === key) return transcriber;
-            setAsrStatus('正在加载本地识别模型：' + model + '（首次会下载模型文件）', 8);
-            transcriber = await pipeline('automatic-speech-recognition', model, {
+            setAsrStatus('正在加载识别运行库...', 48, '模型加载');
+            addAsrLog('加载 Transformers.js 运行库');
+            const transformers = await loadTransformersModule();
+            if (!transformers || typeof transformers.pipeline !== 'function') {
+                throw new Error('识别运行库加载异常，未找到 pipeline 方法');
+            }
+            setAsrStatus('正在加载本地识别模型：' + model + '（首次会下载模型文件）', 50, '模型加载');
+            addAsrLog('加载模型：' + model + '，设备：' + device);
+            transcriber = await transformers.pipeline('automatic-speech-recognition', model, {
                 device,
                 progress_callback: function(data) {
                     if (!data) return;
                     if (data.status === 'progress' && data.progress) {
-                        setAsrStatus('正在下载模型：' + Math.round(data.progress) + '%', Math.min(45, 10 + data.progress * 0.35));
+                        const pct = Math.round(data.progress);
+                        setAsrStatus('正在下载模型文件：' + pct + '%', Math.min(70, 50 + data.progress * 0.2), '模型下载');
                     } else if (data.status === 'ready') {
-                        setAsrStatus('模型已加载，准备识别...', 48);
+                        setAsrStatus('模型已加载，准备识别...', 72, '模型加载');
+                        addAsrLog('模型已加载', 'success');
                     }
                 }
             });
@@ -833,63 +1342,14 @@
             return transcriber;
         }
 
-        window.loadTranscriptMedia = async function() {
-            const url = document.getElementById('transcribe-url').value.trim();
-            if (!url) { alert('请输入媒体直链或M3U8链接'); return; }
-            const video = document.getElementById('asr-video');
-            setAsrStatus('正在加载媒体链接...', 5);
-            revokeCapturedUrl();
-            capturedAudioBlob = null;
-            transcriptText = '';
-            transcriptSrt = '';
-            document.getElementById('transcript-output').value = '';
-            document.getElementById('srt-output').value = '';
-            ['download-audio-btn', 'download-txt-btn', 'download-srt-btn', 'transcribe-btn'].forEach(id => setButtonState(id, false));
-
-            try {
-                if (asrHls) {
-                    asrHls.destroy();
-                    asrHls = null;
-                }
-                video.removeAttribute('src');
-                video.load();
-                const looksLikeM3u8 = /\.m3u8(\?|#|$)/i.test(url) || /m3u8/i.test(url);
-                if (looksLikeM3u8 && typeof Hls !== 'undefined' && Hls.isSupported()) {
-                    asrHls = new Hls({ enableWorker: true, lowLatencyMode: false, backBufferLength: 30 });
-                    asrHls.loadSource(url);
-                    asrHls.attachMedia(video);
-                    asrHls.on(Hls.Events.MANIFEST_PARSED, function () {
-                        setAsrStatus('媒体已加载。点击播放后开始捕获音频。', 12);
-                        log('音频/字幕工具已加载M3U8链接', 'success');
-                    });
-                    asrHls.on(Hls.Events.ERROR, function (_event, data) {
-                        if (data.fatal) {
-                            setAsrStatus('媒体加载失败：' + data.details, 100);
-                            log('音频/字幕媒体加载失败: ' + data.details, 'error');
-                        }
-                    });
-                } else {
-                    video.src = url;
-                    video.addEventListener('loadedmetadata', function onLoaded() {
-                        video.removeEventListener('loadedmetadata', onLoaded);
-                        setAsrStatus('媒体已加载。点击播放后开始捕获音频。', 12);
-                        log('音频/字幕工具已加载媒体直链', 'success');
-                    });
-                    video.load();
-                }
-                video.play().catch(function() {
-                    setAsrStatus('媒体已加载。浏览器阻止自动播放，请手动点击播放器播放后再捕获。', 12);
-                });
-                window.switchTab(2);
-            } catch (error) {
-                setAsrStatus('加载失败：' + error.message, 100);
-                alert('加载失败：' + error.message + '。请确认链接是媒体直链/M3U8，且源站允许CORS。');
-            }
-        };
-
         window.startTranscriptCapture = async function() {
-            const video = document.getElementById('asr-video');
-            if (!video.src && !asrHls) { alert('请先加载一个媒体链接'); return; }
+            if (currentInputKind === 'youtube') {
+                alert('YouTube iframe 音频不能被纯前端页面捕获。请使用媒体直链、上传文件或接入服务端转写。');
+                addAsrLog('已阻止 YouTube 音频捕获：iframe 跨源，不能作为 MediaRecorder/ASR 输入。', 'warn');
+                return;
+            }
+            const video = $('asr-video');
+            if (!video || (!video.src && !asrHls)) { alert('请先检测并加载一个媒体链接'); return; }
             if (!window.MediaRecorder) { alert('当前浏览器不支持 MediaRecorder，无法捕获音频'); return; }
             if (video.paused) {
                 try { await video.play(); } catch (error) { alert('请先手动播放视频后再捕获音频'); return; }
@@ -903,14 +1363,20 @@
             capturedAudioBlob = null;
             revokeCapturedUrl();
             const mimeType = pickAudioMimeType();
+            if (!mimeType) { alert('当前浏览器没有可用的音频录制格式'); return; }
             const audioOnlyStream = new MediaStream(audioTracks);
-            asrRecorder = new MediaRecorder(audioOnlyStream, mimeType ? { mimeType } : undefined);
+            asrRecorder = new MediaRecorder(audioOnlyStream, { mimeType });
             asrRecorder.ondataavailable = function(event) {
                 if (event.data && event.data.size > 0) asrChunks.push(event.data);
             };
+            asrRecorder.onerror = function(event) {
+                addAsrLog('MediaRecorder 错误：' + (event.error ? event.error.message : '未知错误'), 'error');
+            };
             asrRecorder.onstop = async function() {
                 clearTimeout(asrStopTimer);
+                clearInterval(asrCaptureTimer);
                 asrStopTimer = null;
+                asrCaptureTimer = null;
                 const type = mimeType || 'audio/webm';
                 capturedAudioBlob = new Blob(asrChunks, { type });
                 capturedAudioUrl = URL.createObjectURL(capturedAudioBlob);
@@ -918,22 +1384,31 @@
                 setButtonState('transcribe-btn', true);
                 setButtonState('capture-start-btn', true);
                 setButtonState('capture-stop-btn', false);
-                setAsrStatus('音频捕获完成：' + (capturedAudioBlob.size / 1024 / 1024).toFixed(2) + ' MB，开始识别...', 25);
-                log('已捕获音频，大小 ' + (capturedAudioBlob.size / 1024 / 1024).toFixed(2) + ' MB', 'success');
+                asrCapturedSeconds = Math.max(0.1, (Date.now() - asrStartedAt) / 1000);
+                setAsrStatus('音频捕获完成：' + formatBytes(capturedAudioBlob.size) + '，时长约 ' + asrCapturedSeconds.toFixed(1) + ' 秒，开始识别...', 45, '音频捕获');
+                addAsrLog('音频捕获完成：' + formatBytes(capturedAudioBlob.size) + '，时长约 ' + asrCapturedSeconds.toFixed(1) + ' 秒', 'success');
                 await window.transcribeCapturedAudio();
             };
             asrRecorder.start(1000);
+            asrStartedAt = Date.now();
             setButtonState('capture-start-btn', false);
             setButtonState('capture-stop-btn', true);
-            setAsrStatus('正在捕获音频，请保持媒体播放...', 18);
-            const seconds = Math.max(10, Math.min(1800, Number(document.getElementById('capture-seconds').value) || 120));
+            const seconds = Math.max(5, Math.min(1800, Number($('capture-seconds').value) || 60));
+            setAsrStatus('正在捕获音频：0.0 / ' + seconds + ' 秒', 0, '音频捕获');
+            addAsrLog('开始捕获音频，最长 ' + seconds + ' 秒，录制格式：' + mimeType);
+            asrCaptureTimer = setInterval(function() {
+                const elapsed = (Date.now() - asrStartedAt) / 1000;
+                const bytes = asrChunks.reduce((sum, chunk) => sum + chunk.size, 0);
+                const pct = Math.min(44, (elapsed / seconds) * 44);
+                setAsrStatus('正在捕获音频：' + elapsed.toFixed(1) + ' / ' + seconds + ' 秒，已缓存 ' + formatBytes(bytes), pct, '音频捕获');
+            }, 500);
             asrStopTimer = setTimeout(() => window.stopTranscriptCapture(), seconds * 1000);
-            log('开始捕获音频，最长 ' + seconds + ' 秒');
         };
 
         window.stopTranscriptCapture = function() {
             if (!asrRecorder || asrRecorder.state === 'inactive') return;
-            setAsrStatus('正在结束音频捕获...', 22);
+            setAsrStatus('正在结束音频捕获...', 44, '音频捕获');
+            addAsrLog('停止录制，正在封装音频 Blob');
             asrRecorder.stop();
         };
 
@@ -942,11 +1417,20 @@
             const runId = Date.now();
             try {
                 setButtonState('transcribe-btn', false);
-                setAsrStatus('准备音频并启动本地识别...', 35);
+                setAsrStatus('准备音频并启动本地识别...', 46, '转文字');
                 const pipe = await ensureTranscriber();
-                const language = document.getElementById('asr-language').value;
+                const language = $('asr-language').value;
                 const audioUrl = URL.createObjectURL(capturedAudioBlob);
-                setAsrStatus('正在识别音频。长音频会比较慢，请不要关闭页面...', 55);
+                const started = Date.now();
+                clearInterval(asrTranscribeTimer);
+                asrTranscribeTimer = setInterval(function() {
+                    const elapsed = (Date.now() - started) / 1000;
+                    const estimatedTotal = Math.max(20, asrCapturedSeconds * (navigator.gpu ? 1.5 : 5));
+                    const estimated = Math.min(96, 72 + (elapsed / estimatedTotal) * 24);
+                    setAsrStatus('正在转文字：已运行 ' + elapsed.toFixed(1) + ' 秒，估算进度 ' + Math.round(estimated) + '%', estimated, '转文字');
+                }, 700);
+                setAsrStatus('正在识别音频。长音频会比较慢，请不要关闭页面...', 72, '转文字');
+                addAsrLog('开始本地识别：' + formatBytes(capturedAudioBlob.size));
                 const options = Object.assign({
                     return_timestamps: true,
                     chunk_length_s: 30,
@@ -956,26 +1440,31 @@
                 try {
                     output = await pipe(audioUrl, options);
                 } catch (timestampError) {
-                    setAsrStatus('时间戳识别失败，改用纯文本识别...', 65);
+                    addAsrLog('时间戳识别失败，改用纯文本识别：' + timestampError.message, 'warn');
+                    setAsrStatus('时间戳识别失败，改用纯文本识别...', 80, '转文字');
                     output = await pipe(audioUrl, getLanguageOptions(language));
                 } finally {
                     URL.revokeObjectURL(audioUrl);
+                    clearInterval(asrTranscribeTimer);
+                    asrTranscribeTimer = null;
                 }
                 const chunks = normalizeChunks(output);
                 transcriptText = String(output && output.text ? output.text : chunks.map(c => c.text).join(' ')).trim();
                 transcriptSrt = chunksToSrt(chunks);
-                document.getElementById('transcript-output').value = transcriptText;
-                document.getElementById('srt-output').value = transcriptSrt;
+                $('transcript-output').value = transcriptText;
+                $('srt-output').value = transcriptSrt;
                 setButtonState('download-txt-btn', Boolean(transcriptText));
                 setButtonState('download-srt-btn', Boolean(transcriptSrt));
                 setButtonState('transcribe-btn', true);
-                setAsrStatus('识别完成。文本和SRT已生成。', 100);
-                log('音频识别完成，任务ID ' + runId, 'success');
+                setAsrStatus('识别完成。文本和 SRT 已生成。', 100, '完成');
+                addAsrLog('音频识别完成，任务ID ' + runId + '，文本长度 ' + transcriptText.length + ' 字符', 'success');
             } catch (error) {
+                clearInterval(asrTranscribeTimer);
+                asrTranscribeTimer = null;
                 setButtonState('transcribe-btn', true);
-                setAsrStatus('识别失败：' + error.message, 100);
-                log('音频识别失败: ' + error.message, 'error');
-                alert('识别失败：' + error.message + '。可尝试缩短捕获时长、切换Tiny模型，或使用允许跨域的直链。');
+                setAsrStatus('识别失败：' + error.message, 100, '失败');
+                addAsrLog('音频识别失败：' + error.message, 'error');
+                alert('识别失败：' + error.message + '。可尝试缩短捕获时长、切换 Tiny 模型，或使用允许跨域的直链。');
             }
         };
 
@@ -983,16 +1472,19 @@
             if (!capturedAudioBlob) { alert('没有可下载的音频'); return; }
             const ext = capturedAudioBlob.type.includes('mp4') ? 'm4a' : 'webm';
             createDownload('captured-audio-' + Date.now() + '.' + ext, capturedAudioBlob);
+            addAsrLog('已触发音频下载', 'success');
         };
 
         window.downloadTranscriptText = function() {
             if (!transcriptText) { alert('没有可下载的文本'); return; }
             createDownload('transcript-' + Date.now() + '.txt', new Blob([transcriptText], { type: 'text/plain;charset=utf-8' }));
+            addAsrLog('已触发 TXT 下载', 'success');
         };
 
         window.downloadTranscriptSrt = function() {
-            if (!transcriptSrt) { alert('没有可下载的SRT'); return; }
+            if (!transcriptSrt) { alert('没有可下载的 SRT'); return; }
             createDownload('transcript-' + Date.now() + '.srt', new Blob([transcriptSrt], { type: 'application/x-subrip;charset=utf-8' }));
+            addAsrLog('已触发 SRT 下载', 'success');
         };
     </script>
 
