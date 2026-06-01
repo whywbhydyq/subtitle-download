@@ -1,252 +1,198 @@
-﻿<!DOCTYPE html>
-<html lang="zh">
+<!doctype html>
+<html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="免费M3U8在线播放器、MP4转换与音频字幕工具。浏览器直接播放HLS直播/点播视频流，支持M3U8转MP4、链接音频捕获、本地Whisper文字识别和SRT字幕导出。无需安装，纯前端实现。">
-    <meta name="robots" content="index, follow">
-
-    <meta name="google-adsense-account" content="ca-pub-1653188471819736">
-<meta name="baidu-site-verification" content="codeva-gN7eRrx9OM" />
-    <title>M3U8在线播放器 - 免费HLS播放、MP4转换与音频字幕工具</title>
-    <link rel="canonical" href="https://m3u8player.gitlcp.com/">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        .hero-bg {
-            background: linear-gradient(135deg, #0ea5e9 0%, #3b82f6 100%);
-        }
-        .tool-card {
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .tool-card:hover {
-            transform: translateY(-8px);
-            box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.15);
-        }
-    </style>
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "WebSite",
-      "name": "M3U8在线播放器",
-      "url": "https://m3u8player.gitlcp.com",
-      "description": "免费专业的HLS/M3U8在线播放、转换、音频提取和字幕生成平台",
-      "potentialAction": {
-        "@type": "SearchAction",
-        "target": "https://m3u8player.gitlcp.com/player.html?q={search_term_string}",
-        "query-input": "required name=search_term_string"
-      }
-    }
-    </script>
-    <!-- AdSense -->
-    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1653188471819736" crossorigin="anonymous"></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>subtitle-download - 链接视频检测、音频提取与文字/SRT生成</title>
+  <meta name="description" content="subtitle-download 是纯前端链接视频检测与音频转文字工具。输入 YouTube、视频直链、音频直链或 HLS 链接后，网页会反馈连接、可操作、可播放、可捕获状态，并显示音频提取和转文字进度。">
+  <link rel="canonical" href="https://subtitle-download.gitlcp.com/">
+  <link rel="stylesheet" href="assets/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js" defer></script>
+  <script src="assets/subtitle-download.js" defer></script>
 </head>
-<body class="bg-zinc-50 dark:bg-neutral-950 text-zinc-900 dark:text-zinc-100">
-    <!-- Top Navigation -->
-    <nav class="bg-white/80 dark:bg-neutral-900/80 backdrop-blur-lg border-b border-zinc-200 dark:border-neutral-800 sticky top-0 z-50">
-        <div class="max-w-7xl mx-auto px-8 py-5 flex justify-between items-center">
-            <div class="flex items-center gap-x-4">
-                <div class="flex items-center gap-x-3">
-                    <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-2xl flex items-center justify-center shadow-inner">
-                        <span class="text-white text-3xl font-black tracking-tighter">M</span>
-                    </div>
-                    <div class="font-bold text-3xl tracking-tighter">M3U8<span class="text-blue-600">Player</span></div>
-                </div>
-            </div>
-            
-            <div class="hidden md:flex items-center gap-x-9 text-sm font-medium">
-                <a href="https://m3u8player.gitlcp.com/player.html" class="hover:text-blue-600 transition-colors">播放器工具</a>
-                <a href="https://m3u8player.gitlcp.com/about.html" class="hover:text-blue-600 transition-colors">关于</a>
-                <a href="https://m3u8player.gitlcp.com/privacy.html" class="hover:text-blue-600 transition-colors">隐私政策</a>
-                <a href="https://m3u8player.gitlcp.com/terms.html" class="hover:text-blue-600 transition-colors">服务条款</a>
-                <a href="https://m3u8player.gitlcp.com/contact.html" class="hover:text-blue-600 transition-colors">联系我们</a>
-            </div>
-            
-            <a href="https://m3u8player.gitlcp.com/player.html" 
-               class="px-7 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold rounded-2xl transition-all active:scale-95">
-                立即使用播放器 →
-            </a>
-        </div>
+<body>
+  <header class="shell header">
+    <a class="brand" href="index.html" aria-label="subtitle-download 首页">
+      <span class="logo" aria-hidden="true"></span>
+      <span>
+        <span class="brand-title">subtitle-download</span><br>
+        <span class="subtle" style="font-size:13px">链接检测 · 音频提取 · 本地转文字</span>
+      </span>
+    </a>
+    <nav class="nav" aria-label="主导航">
+      <a href="#app">开始使用</a>
+      <a href="about.html">关于</a>
+      <a href="privacy.html">隐私</a>
+      <a href="contact.html">联系</a>
     </nav>
+  </header>
 
-    <header class="hero-bg text-white">
-        <div class="max-w-5xl mx-auto px-6 pt-20 pb-24 text-center">
-            <div class="inline-flex items-center gap-2 bg-white/20 text-white text-xs font-medium tracking-widest px-5 h-7 rounded-3xl mb-6">纯浏览器 · 无服务器 · 零安装</div>
-            <h1 class="text-6xl md:text-7xl font-bold tracking-tighter leading-none mb-6">
-                免费 M3U8<br>在线播放器
-            </h1>
-            <p class="max-w-xl mx-auto text-xl text-blue-100 mb-10">
-                专业HLS流媒体播放工具 + 浏览器端MP4转换 + 本地音频字幕识别<br>
-                输入媒体链接即可播放、捕获音频并生成文字/SRT
-            </p>
-            <div class="flex flex-col sm:flex-row gap-4 justify-center">
-                <a href="https://m3u8player.gitlcp.com/player.html" 
-                   class="inline-flex items-center justify-center gap-x-3 bg-white text-blue-700 hover:bg-amber-50 font-semibold text-lg h-14 px-10 rounded-3xl transition-all">
-                    <span>🚀 立即打开播放器</span>
-                </a>
-                <a href="https://m3u8player.gitlcp.com/post/1001.html" 
-                   class="inline-flex items-center justify-center border border-white/60 hover:bg-white/10 font-medium text-lg h-14 px-9 rounded-3xl transition-all">
-                    阅读使用教程
-                </a>
-            </div>
-            <div class="mt-10 flex justify-center items-center gap-x-8 text-xs opacity-75">
-                <div class="flex items-center gap-x-1.5"><div class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div> 已提交 Google / Bing / 百度收录</div>
-                <div>符合 AdSense 审核要求</div>
-            </div>
+  <main class="shell">
+    <section class="hero">
+      <div>
+        <h1>把链接丢进去，立刻看到它到底能不能用。</h1>
+        <p>
+          输入 YouTube 页面链接、视频直链、音频直链或 HLS 链接后，网页会立即反馈链接类型、连接状态、播放器是否可操作、是否可播放、是否能捕获音频，并显示音频提取和转文字进度。
+        </p>
+        <div class="badges">
+          <span class="badge">纯前端页面</span>
+          <span class="badge">Chrome 桌面端优先</span>
+          <span class="badge">本地 Whisper 识别</span>
+          <span class="badge">TXT / SRT 导出</span>
         </div>
-    </header>
+      </div>
+      <aside class="notice">
+        <strong>YouTube 处理逻辑：</strong>网页可以用官方 IFrame API 检测 YouTube 链接是否能连接、能操作、能播放；但 YouTube iframe 的音频不能被纯前端页面直接捕获给 ASR。要真正转文字，需要媒体直链、本地上传文件或合法服务端音频提取管线。
+      </aside>
+    </section>
 
-    <main>
-        <!-- Tools Entrance -->
-        <div class="max-w-7xl mx-auto px-8 -mt-8">
-            <div class="grid lg:grid-cols-3 md:grid-cols-2 gap-6">
-                <!-- Player Card -->
-                <a href="https://m3u8player.gitlcp.com/player.html" 
-                   class="tool-card group bg-white dark:bg-neutral-900 border border-zinc-100 dark:border-neutral-800 rounded-3xl p-8 flex flex-col h-full">
-                    <div class="flex-1">
-                        <div class="inline px-4 py-1.5 text-xs font-mono bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 rounded-2xl mb-6">CORE TOOL #1</div>
-                        <div class="text-4xl font-semibold tracking-tight mb-3 group-hover:text-blue-600 transition-colors">在线播放 M3U8 / HLS</div>
-                        <div class="text-zinc-600 dark:text-zinc-400 leading-relaxed">
-                            支持直播和点播。hls.js 引擎 + 自定义Referer/User-Agent。<br>
-                            自动适配码率，画质丝滑。
-                        </div>
-                    </div>
-                    <div class="mt-auto pt-8 flex items-center justify-between text-sm">
-                        <div class="flex items-center gap-x-2 text-emerald-500">
-                            <span class="text-xl">▶️</span>
-                            <span class="font-medium">立即播放</span>
-                        </div>
-                        <span class="text-xs px-5 py-2 bg-zinc-100 dark:bg-neutral-800 rounded-3xl">player.html</span>
-                    </div>
-                </a>
+    <section id="app" class="app-grid" aria-label="subtitle-download 应用">
+      <div class="panel">
+        <div class="panel-inner">
+          <h2>链接检测与音频转文字</h2>
+          <p class="subtle" style="margin:10px 0 0">
+            一次点击先给出可用性反馈；如果是可播放且可捕获的媒体直链，可以继续捕获音频并在浏览器本地转成文本/SRT。
+          </p>
 
-                <!-- Converter Card -->
-                <a href="https://m3u8player.gitlcp.com/m3u8_to_mp4/" 
-                   class="tool-card group bg-white dark:bg-neutral-900 border border-zinc-100 dark:border-neutral-800 rounded-3xl p-8 flex flex-col h-full">
-                    <div class="flex-1">
-                        <div class="inline px-4 py-1.5 text-xs font-mono bg-violet-100 dark:bg-violet-950 text-violet-700 dark:text-violet-300 rounded-2xl mb-6">CORE TOOL #2</div>
-                        <div class="text-4xl font-semibold tracking-tight mb-3 group-hover:text-violet-600 transition-colors">M3U8 转 MP4</div>
-                        <div class="text-zinc-600 dark:text-zinc-400 leading-relaxed">
-                            直接读取M3U8分片并在浏览器端转封装为MP4。<br>
-                            纯前端实现，无需上传视频，保护隐私。
-                        </div>
-                    </div>
-                    <div class="mt-auto pt-8 flex items-center justify-between text-sm">
-                        <div class="flex items-center gap-x-2 text-violet-500">
-                            <span class="text-xl">📥</span>
-                            <span class="font-medium">开始转换</span>
-                        </div>
-                        <span class="text-xs px-5 py-2 bg-zinc-100 dark:bg-neutral-800 rounded-3xl">m3u8_to_mp4</span>
-                    </div>
-                </a>
-
-                <!-- Audio Subtitle Card -->
-                <a href="https://m3u8player.gitlcp.com/player.html#audio-subtitle" 
-                   class="tool-card group bg-white dark:bg-neutral-900 border border-zinc-100 dark:border-neutral-800 rounded-3xl p-8 flex flex-col h-full">
-                    <div class="flex-1">
-                        <div class="inline px-4 py-1.5 text-xs font-mono bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 rounded-2xl mb-6">CORE TOOL #3</div>
-                        <div class="text-4xl font-semibold tracking-tight mb-3 group-hover:text-emerald-600 transition-colors">链接音频转文字 / SRT</div>
-                        <div class="text-zinc-600 dark:text-zinc-400 leading-relaxed">
-                            从可访问的视频或M3U8链接捕获音频，浏览器端本地Whisper识别。<br>
-                            支持中文、英文文本输出和SRT字幕下载。
-                        </div>
-                    </div>
-                    <div class="mt-auto pt-8 flex items-center justify-between text-sm">
-                        <div class="flex items-center gap-x-2 text-emerald-500">
-                            <span class="text-xl">🎙️</span>
-                            <span class="font-medium">生成文字/SRT</span>
-                        </div>
-                        <span class="text-xs px-5 py-2 bg-zinc-100 dark:bg-neutral-800 rounded-3xl">player.html</span>
-                    </div>
-                </a>
+          <div class="form-row">
+            <label for="source-url">视频 / 音频链接</label>
+            <input id="source-url" class="input" type="url" spellcheck="false" value="https://www.youtube.com/watch?v=gLvLqvVxIco" placeholder="https://www.youtube.com/watch?v=... 或 https://example.com/video.mp4">
+            <div class="badges" style="margin-top:6px">
+              <button type="button" class="badge" data-example="https://www.youtube.com/watch?v=gLvLqvVxIco">YouTube 示例</button>
+              <button type="button" class="badge" data-example="https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4">MP4 示例</button>
+              <button type="button" class="badge" data-example="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3">MP3 示例</button>
+              <button type="button" class="badge" data-example="https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8">HLS 示例</button>
             </div>
+          </div>
+
+          <div class="controls-grid">
+            <div class="form-row">
+              <label for="language-select">识别语言</label>
+              <select id="language-select" class="select">
+                <option value="auto" selected>自动 / 中英混合</option>
+                <option value="zh">中文优先</option>
+                <option value="en">英文优先</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="model-select">本地模型</label>
+              <select id="model-select" class="select">
+                <option value="tiny" selected>Whisper Tiny（快）</option>
+                <option value="tiny-timestamped">Whisper Tiny Timestamped</option>
+                <option value="base">Whisper Base（较准，较慢）</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label for="capture-seconds">最长捕获 / 秒</label>
+              <input id="capture-seconds" class="input" type="number" min="5" max="1800" value="60" style="font-family:inherit">
+            </div>
+          </div>
+
+          <div class="actions">
+            <button id="inspect-btn" class="btn btn-primary" type="button">检测链接并尝试播放</button>
+            <button id="auto-btn" class="btn btn-green" type="button">检测后自动捕获并转文字</button>
+            <button id="capture-start-btn" class="btn btn-amber" type="button">开始捕获音频</button>
+            <button id="capture-stop-btn" class="btn btn-dark" type="button">停止并识别</button>
+          </div>
+
+          <div class="status-grid" aria-label="链接检测结果">
+            <div class="status-card">
+              <div class="status-label">链接类型</div>
+              <div id="check-type" class="status-value pending">未检测</div>
+            </div>
+            <div class="status-card">
+              <div class="status-label">连接</div>
+              <div id="check-connect" class="status-value pending">未检测</div>
+            </div>
+            <div class="status-card">
+              <div class="status-label">可操作</div>
+              <div id="check-control" class="status-value pending">未检测</div>
+            </div>
+            <div class="status-card">
+              <div class="status-label">可播放</div>
+              <div id="check-play" class="status-value pending">未检测</div>
+            </div>
+            <div class="status-card">
+              <div class="status-label">可捕获音频</div>
+              <div id="check-capture" class="status-value pending">未检测</div>
+            </div>
+          </div>
+
+          <div class="progress-stack" aria-label="处理进度">
+            <div class="progress-box">
+              <div class="progress-top"><span id="overall-label">总进度</span><span id="overall-percent">0%</span></div>
+              <div class="track"><div id="overall-bar" class="bar"></div></div>
+              <p id="overall-detail" class="subtle" style="margin:8px 0 0;font-size:13px">等待检测。</p>
+            </div>
+            <div class="progress-box">
+              <div class="progress-top"><span id="audio-label">音频提取</span><span id="audio-percent">0%</span></div>
+              <div class="track"><div id="audio-bar" class="bar"></div></div>
+              <p id="audio-detail" class="subtle" style="margin:8px 0 0;font-size:13px">等待捕获。</p>
+            </div>
+            <div class="progress-box">
+              <div class="progress-top"><span id="model-label">模型加载</span><span id="model-percent">0%</span></div>
+              <div class="track"><div id="model-bar" class="bar"></div></div>
+              <p id="model-detail" class="subtle" style="margin:8px 0 0;font-size:13px">等待识别。</p>
+            </div>
+            <div class="progress-box">
+              <div class="progress-top"><span id="text-label">转文字</span><span id="text-percent">0%</span></div>
+              <div class="track"><div id="text-bar" class="bar"></div></div>
+              <p id="text-detail" class="subtle" style="margin:8px 0 0;font-size:13px">等待识别。</p>
+            </div>
+          </div>
+
+          <div id="native-panel" class="media-shell">
+            <video id="media-element" controls crossorigin="anonymous" playsinline></video>
+          </div>
+          <div id="youtube-panel" class="media-shell hidden">
+            <div id="youtube-player" style="width:100%;height:100%"></div>
+          </div>
+
+          <div class="downloads">
+            <button id="download-audio-btn" class="btn btn-outline" type="button">下载音频</button>
+            <button id="download-txt-btn" class="btn btn-outline" type="button">下载 TXT</button>
+            <button id="download-srt-btn" class="btn btn-outline" type="button">下载 SRT</button>
+          </div>
+        </div>
+      </div>
+
+      <aside class="output-stack">
+        <div class="panel">
+          <div class="panel-inner">
+            <h3>实时诊断日志</h3>
+            <p class="subtle" style="margin:8px 0 14px;font-size:13px">点击按钮后，这里会持续输出连接、播放、捕获和识别阶段。</p>
+            <div id="diagnostics-log" class="log" data-empty="true"><div class="line">[等待] 粘贴链接后点击“检测链接并尝试播放”。</div></div>
+          </div>
         </div>
 
-        <!-- Site structure note -->
-        <div class="bg-white dark:bg-neutral-900 py-12">
-            <div class="max-w-7xl mx-auto px-8 text-center">
-                <p class="text-sm text-zinc-500">本站包含首页、播放器、4篇高质量技术文章、关于、隐私政策、联系我们及404页面。所有页面均有独特 &lt;title&gt;、meta description、JSON-LD 结构化数据和规范 heading 结构。</p>
-            </div>
+        <div class="panel">
+          <div class="panel-inner">
+            <h3>识别结果</h3>
+            <textarea id="transcript-output" class="textarea" readonly placeholder="识别完成后，纯文本会显示在这里。"></textarea>
+          </div>
         </div>
-    </main>
 
-    <!-- Footer -->
-    <footer class="bg-zinc-900 text-zinc-400">
-        <div class="max-w-7xl mx-auto px-8 pt-16 pb-8">
-            <div class="grid grid-cols-2 md:grid-cols-5 gap-y-10">
-                <div>
-                    <div class="flex items-center gap-x-3 text-white mb-6">
-                        <div class="w-8 h-8 bg-blue-600 rounded-2xl flex items-center justify-center text-2xl font-black">M</div>
-                        <div class="font-bold text-2xl">M3U8Player</div>
-                    </div>
-                    <p class="text-xs leading-relaxed pr-6">一个专注于流媒体技术的开源项目。<br>帮助用户轻松播放、保存网络视频，并从可访问媒体链接生成文本。</p>
-                    <div class="mt-6 text-[10px] opacity-60">AdSense 发布商 ID: pub-1653188471819736</div>
-                </div>
-                
-                <div>
-                    <div class="uppercase text-zinc-500 text-xs mb-5 tracking-widest">工具</div>
-                    <div class="space-y-3 text-sm">
-                        <a href="https://m3u8player.gitlcp.com/player.html" class="block hover:text-white transition-colors">M3U8 在线播放器</a>
-                        <a href="https://m3u8player.gitlcp.com/m3u8_to_mp4/" class="block hover:text-white transition-colors">M3U8 转 MP4</a>
-                        <a href="https://m3u8player.gitlcp.com/player.html#audio-subtitle" class="block hover:text-white transition-colors">链接音频转文字/SRT</a>
-                    </div>
-                </div>
-                
-                <div>
-                    <div class="uppercase text-zinc-500 text-xs mb-5 tracking-widest">知识文章</div>
-                    <div class="space-y-3 text-sm">
-                        <a href="https://m3u8player.gitlcp.com/post/1001.html" class="block hover:text-white transition-colors">M3U8协议全面解析</a>
-                        <a href="https://m3u8player.gitlcp.com/post/1002.html" class="block hover:text-white transition-colors">如何抓取直播源地址</a>
-                        <a href="https://m3u8player.gitlcp.com/post/1003.html" class="block hover:text-white transition-colors">HLS播放器技术原理</a>
-                        <a href="https://m3u8player.gitlcp.com/post/1004.html" class="block hover:text-white transition-colors">浏览器视频下载技巧</a>
-                    </div>
-                </div>
-                
-                <div>
-                    <div class="uppercase text-zinc-500 text-xs mb-5 tracking-widest">本站</div>
-                    <div class="space-y-3 text-sm">
-                        <a href="https://m3u8player.gitlcp.com/about.html" class="block hover:text-white transition-colors">关于我们</a>
-                        <a href="https://m3u8player.gitlcp.com/privacy.html" class="block hover:text-white transition-colors">隐私政策</a>
-                        <a href="https://m3u8player.gitlcp.com/terms.html" class="block hover:text-white transition-colors">服务条款</a>
-                        <a href="https://m3u8player.gitlcp.com/disclaimer.html" class="block hover:text-white transition-colors">免责声明</a>
-                        <a href="mailto:2922027393@qq.com" class="block hover:text-white transition-colors">联系我们</a>
-                    </div>
-                </div>
-                
-                <div class="col-span-2 md:col-span-1">
-                    <div class="uppercase text-zinc-500 text-xs mb-5 tracking-widest">外部资源</div>
-                    <div class="text-xs space-y-4">
-                        <a href="https://github.com/whywbhydyq/m3u8player" target="_blank" class="flex items-center gap-2 hover:text-white">
-                            <span class="text-[#0ea5e9]">↗</span> GitHub 仓库
-                        </a>
-                        <div class="text-[10px] leading-tight opacity-60">
-                            Vercel 托管<br>
-                            已提交 sitemap.xml 到 Google、Bing、百度<br>
-                            符合 AdSense 全部要求
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="mt-20 pt-8 border-t border-white/10 text-[10px] flex flex-col md:flex-row justify-between items-center gap-4 text-center md:text-left">
-                <div>&copy; 2025 M3U8Player.gitlcp.com · 所有内容均为演示与教育用途。请确保您拥有相应视频版权。</div>
-                <div class="flex items-center gap-x-5 text-[11px]">
-                    <a href="https://m3u8player.gitlcp.com/sitemap.xml" class="hover:text-white">sitemap.xml</a>
-                    <a href="https://m3u8player.gitlcp.com/robots.txt" class="hover:text-white">robots.txt</a>
-                    <a href="https://m3u8player.gitlcp.com/ads.txt" class="hover:text-white">ads.txt</a>
-                </div>
-            </div>
+        <div class="panel">
+          <div class="panel-inner">
+            <h3>SRT 字幕</h3>
+            <textarea id="srt-output" class="textarea" readonly placeholder="如果模型返回时间戳，SRT 会显示在这里；否则会生成一个粗略时间段。"></textarea>
+          </div>
         </div>
-    </footer>
 
-    <script>
-        tailwind.config = {
-            content: [],
-            theme: { extend: {} }
-        };
-        
-        if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-            document.documentElement.classList.add('dark');
-        }
-    </script>
+        <div class="panel">
+          <div class="panel-inner">
+            <h3>当前规则</h3>
+            <div class="kv" style="margin-top:14px"><strong>YouTube</strong><span>检测连接、可操作、可播放；不承诺纯前端捕获音频。</span></div>
+            <div class="kv"><strong>媒体直链</strong><span>尝试播放、captureStream 捕获、MediaRecorder 封装音频、本地 Whisper 转文字。</span></div>
+            <div class="kv"><strong>普通网页</strong><span>不能直接拆出视频音频；需要真实媒体链接或服务端解析。</span></div>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <footer class="shell footer">
+    <div>© 2026 subtitle-download · 纯前端诊断与本地识别工具。请只处理你有权使用的媒体内容。</div>
+  </footer>
 </body>
 </html>

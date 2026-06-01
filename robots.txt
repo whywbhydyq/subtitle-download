@@ -1,4 +1,3 @@
 User-agent: *
 Allow: /
-
-Sitemap: https://m3u8player.gitlcp.com/sitemap.xml
+Sitemap: https://subtitle-download.gitlcp.com/sitemap.xml
