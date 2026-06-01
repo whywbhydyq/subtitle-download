@@ -32,7 +32,7 @@
       <div>
         <h1>把链接丢进去，立刻看到它到底能不能用。</h1>
         <p>
-          输入 YouTube 页面链接、视频直链、音频直链或 HLS 链接后，网页会立即反馈链接类型、连接状态、播放器是否可操作、是否可播放、是否能捕获音频，并显示音频提取和转文字进度。
+          输入 YouTube 页面链接、视频直链、音频直链或 HLS 链接后，网页会立即反馈链接类型、连接状态、播放器是否可操作、是否可播放、是否能捕获音频，并显示音频提取和转文字进度。YouTube 等 iframe 链接会走“当前标签页音频捕获”授权流程。
         </p>
         <div class="badges">
           <span class="badge">纯前端页面</span>
@@ -42,7 +42,7 @@
         </div>
       </div>
       <aside class="notice">
-        <strong>YouTube 处理逻辑：</strong>网页可以用官方 IFrame API 检测 YouTube 链接是否能连接、能操作、能播放；但 YouTube iframe 的音频不能被纯前端页面直接捕获给 ASR。要真正转文字，需要媒体直链、本地上传文件或合法服务端音频提取管线。
+        <strong>YouTube 处理逻辑：</strong>网页先用 IFrame API 检测 YouTube 链接是否能连接、能操作、能播放；随后提供“捕获当前标签页音频”按钮。用户在浏览器弹窗里选择当前标签页并勾选共享音频后，subtitle-download 会录制标签页音频并本地转文字。
       </aside>
     </section>
 
@@ -91,7 +91,8 @@
           <div class="actions">
             <button id="inspect-btn" class="btn btn-primary" type="button">检测链接并尝试播放</button>
             <button id="auto-btn" class="btn btn-green" type="button">检测后自动捕获并转文字</button>
-            <button id="capture-start-btn" class="btn btn-amber" type="button">开始捕获音频</button>
+            <button id="capture-start-btn" class="btn btn-amber" type="button">开始捕获媒体音频</button>
+            <button id="capture-tab-btn" class="btn btn-amber" type="button">捕获当前标签页音频</button>
             <button id="capture-stop-btn" class="btn btn-dark" type="button">停止并识别</button>
           </div>
 
@@ -182,7 +183,7 @@
         <div class="panel">
           <div class="panel-inner">
             <h3>当前规则</h3>
-            <div class="kv" style="margin-top:14px"><strong>YouTube</strong><span>检测连接、可操作、可播放；不承诺纯前端捕获音频。</span></div>
+            <div class="kv" style="margin-top:14px"><strong>YouTube</strong><span>检测连接、可操作、可播放；通过浏览器授权捕获当前标签页音频后本地转文字。</span></div>
             <div class="kv"><strong>媒体直链</strong><span>尝试播放、captureStream 捕获、MediaRecorder 封装音频、本地 Whisper 转文字。</span></div>
             <div class="kv"><strong>普通网页</strong><span>不能直接拆出视频音频；需要真实媒体链接或服务端解析。</span></div>
           </div>

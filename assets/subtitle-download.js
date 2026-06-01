@@ -41,6 +41,8 @@
     capturedSeconds: 0,
     capturedBlob: null,
     capturedUrl: '',
+    displayStream: null,
+    captureMode: '',
     transcriptText: '',
     transcriptSrt: '',
     transcriber: null,
@@ -126,6 +128,7 @@
 
   function resetOutputs() {
     if (app.capturedUrl) URL.revokeObjectURL(app.capturedUrl);
+    app.captureMode = '';
     app.capturedUrl = '';
     app.capturedBlob = null;
     app.chunks = [];
@@ -136,7 +139,7 @@
     const srt = $('srt-output');
     if (transcript) transcript.value = '';
     if (srt) srt.value = '';
-    ['download-audio-btn', 'download-txt-btn', 'download-srt-btn', 'transcribe-btn'].forEach((id) => setButton(id, false));
+    ['download-audio-btn', 'download-txt-btn', 'download-srt-btn', 'transcribe-btn', 'capture-tab-btn'].forEach((id) => setButton(id, false));
   }
 
   function teardownNativeMedia() {
@@ -160,6 +163,14 @@
     app.ytPlayer = null;
     const host = $('youtube-player');
     if (host) host.innerHTML = '';
+  }
+
+  function stopDisplayCaptureTracks() {
+    if (!app.displayStream) return;
+    app.displayStream.getTracks().forEach((track) => {
+      try { track.stop(); } catch (_) {}
+    });
+    app.displayStream = null;
   }
 
   function showNative() {
@@ -396,10 +407,11 @@
     setStatus('check-connect', '加载 API 中', 'pending');
     setStatus('check-control', '等待播放器', 'pending');
     setStatus('check-play', '等待事件', 'pending');
-    setStatus('check-capture', '不可捕获', 'warn');
+    setStatus('check-capture', '需授权标签页音频', 'warn');
+    setButton('capture-tab-btn', false);
     setProgress('overall', 10, 'YouTube 检测', '正在加载 YouTube IFrame API。');
     log('YouTube 视频 ID：' + id + '。');
-    log('YouTube 是跨源 iframe 播放器；页面可以检测和控制播放，但不能把 iframe 音频交给浏览器本地 ASR。', 'warn');
+    log('YouTube 是跨源 iframe 播放器；不能直接读取 iframe 内部音频，但可以在用户授权后捕获当前标签页音频。', 'warn');
 
     const api = await loadYouTubeApi();
     setStatus('check-connect', 'IFrame API 已连接', 'ok');
@@ -458,10 +470,11 @@
       });
     });
 
-    setStatus('check-capture', 'iframe 不可捕获', 'warn');
-    setProgress('audio', 0, '音频提取', 'YouTube iframe 音频不能被纯前端捕获。');
-    setProgress('text', 0, '转文字', '需要媒体直链、文件上传或服务端提取音频。');
-    log('结论：该 YouTube 链接可以做连接/操作/播放诊断；不能在纯前端直接捕获音频转文字。', 'warn');
+    setStatus('check-capture', '可授权捕获标签页', 'warn');
+    setButton('capture-tab-btn', true);
+    setProgress('audio', 0, '音频提取', '等待点击“捕获当前标签页音频”。请在浏览器弹窗里选择当前标签页并勾选共享音频。');
+    setProgress('text', 0, '转文字', '捕获完成后会自动开始本地转文字。');
+    log('结论：该 YouTube 链接可连接、可操作；下一步点击“捕获当前标签页音频”，授权后即可录制标签页声音并转文字。', 'success');
     return false;
   }
 
@@ -484,10 +497,12 @@
       return;
     }
     clearLog();
+    stopDisplayCaptureTracks();
     resetChecks();
     resetProgress();
     resetOutputs();
     setButton('capture-start-btn', false);
+    setButton('capture-tab-btn', false);
     setButton('capture-stop-btn', false);
     setProgress('overall', 3, '链接检测', '开始检测链接。');
     log('开始检测：' + input);
@@ -533,15 +548,70 @@
       const elapsed = (Date.now() - app.captureStartedAt) / 1000;
       const bytes = app.chunks.reduce((sum, chunk) => sum + chunk.size, 0);
       const pct = Math.min(100, (elapsed / seconds) * 100);
-      setProgress('audio', pct, '音频提取', '正在捕获音频：' + elapsed.toFixed(1) + ' / ' + seconds + ' 秒，已缓存 ' + formatBytes(bytes) + '。');
+      setProgress('audio', pct, app.captureMode || '音频提取', '正在捕获音频：' + elapsed.toFixed(1) + ' / ' + seconds + ' 秒，已缓存 ' + formatBytes(bytes) + '。');
       setProgress('overall', Math.min(72, 58 + pct * 0.14), '音频提取', '音频捕获进行中。');
     }, 500);
   }
 
+  function recorderStopHandler(mime) {
+    return async () => {
+      clearInterval(app.captureTimer);
+      clearTimeout(app.stopTimer);
+      app.captureTimer = null;
+      app.stopTimer = null;
+      const type = mime || 'audio/webm';
+      app.capturedBlob = new Blob(app.chunks, { type });
+      app.capturedUrl = URL.createObjectURL(app.capturedBlob);
+      app.capturedSeconds = Math.max(0.1, (Date.now() - app.captureStartedAt) / 1000);
+      stopDisplayCaptureTracks();
+      setButton('capture-start-btn', app.currentKind !== 'youtube' && app.mediaReadyForCapture);
+      setButton('capture-tab-btn', app.currentKind === 'youtube');
+      setButton('capture-stop-btn', false);
+      setButton('download-audio-btn', app.capturedBlob.size > 0);
+      setButton('transcribe-btn', app.capturedBlob.size > 0);
+      setProgress('audio', 100, '音频提取', '音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒。');
+      setProgress('overall', 72, '音频完成', '开始转文字。');
+      log('音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒。', 'success');
+      if (app.capturedBlob.size > 0) await transcribe();
+    };
+  }
+
+  async function startRecorderFromAudioStream(audioStream, mime, seconds, modeLabel) {
+    if (!audioStream || !audioStream.getAudioTracks().length) throw new Error('没有可录制的音轨。');
+    resetOutputs();
+    app.chunks = [];
+    app.capturedBlob = null;
+    app.captureStartedAt = Date.now();
+    app.captureMode = modeLabel;
+    app.recorder = new MediaRecorder(audioStream, { mimeType: mime });
+    app.recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) app.chunks.push(event.data);
+    };
+    app.recorder.onerror = (event) => {
+      log('MediaRecorder 错误：' + (event.error ? event.error.message : '未知错误'), 'error');
+    };
+    app.recorder.onstop = recorderStopHandler(mime);
+    audioStream.getAudioTracks().forEach((track) => {
+      track.onended = () => {
+        log('音频轨道已结束。', 'warn');
+        if (app.recorder && app.recorder.state !== 'inactive') stopCapture();
+      };
+    });
+
+    app.recorder.start(1000);
+    setButton('capture-start-btn', false);
+    setButton('capture-tab-btn', false);
+    setButton('capture-stop-btn', true);
+    setProgress('audio', 0, '音频提取', '正在捕获音频：0.0 / ' + seconds + ' 秒。');
+    log('开始' + modeLabel + '，最长 ' + seconds + ' 秒，录制格式：' + mime + '。');
+    startCaptureTimer(seconds);
+    app.stopTimer = setTimeout(() => stopCapture(), seconds * 1000);
+  }
+
   async function startCapture() {
     if (app.currentKind === 'youtube') {
-      alert('YouTube iframe 音频不能被纯前端捕获。页面只能检测 YouTube 的连接、控制和播放状态。');
-      log('已阻止 YouTube 音频捕获：iframe 跨源，不能作为 MediaRecorder/ASR 输入。', 'warn');
+      log('YouTube 需要使用“捕获当前标签页音频”按钮；媒体元素 captureStream 不能读取 iframe 内部音频。', 'warn');
+      alert('YouTube 请点击“捕获当前标签页音频”，并在浏览器弹窗中选择当前标签页、勾选共享音频。');
       return;
     }
     const media = $('media-element');
@@ -563,45 +633,75 @@
     const mime = pickAudioMime();
     if (!mime) { alert('没有可用音频录制编码。'); return; }
 
-    resetOutputs();
-    app.chunks = [];
-    app.capturedBlob = null;
-    app.captureStartedAt = Date.now();
-    const audioStream = new MediaStream(tracks);
-    app.recorder = new MediaRecorder(audioStream, { mimeType: mime });
-    app.recorder.ondataavailable = (event) => {
-      if (event.data && event.data.size > 0) app.chunks.push(event.data);
-    };
-    app.recorder.onerror = (event) => {
-      log('MediaRecorder 错误：' + (event.error ? event.error.message : '未知错误'), 'error');
-    };
-    app.recorder.onstop = async () => {
-      clearInterval(app.captureTimer);
-      clearTimeout(app.stopTimer);
-      app.captureTimer = null;
-      app.stopTimer = null;
-      const type = mime || 'audio/webm';
-      app.capturedBlob = new Blob(app.chunks, { type });
-      app.capturedUrl = URL.createObjectURL(app.capturedBlob);
-      app.capturedSeconds = Math.max(0.1, (Date.now() - app.captureStartedAt) / 1000);
-      setButton('capture-start-btn', true);
-      setButton('capture-stop-btn', false);
-      setButton('download-audio-btn', app.capturedBlob.size > 0);
-      setButton('transcribe-btn', app.capturedBlob.size > 0);
-      setProgress('audio', 100, '音频提取', '音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒。');
-      setProgress('overall', 72, '音频完成', '开始转文字。');
-      log('音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒。', 'success');
-      if (app.capturedBlob.size > 0) await transcribe();
-    };
-
     const seconds = currentSettings().seconds;
-    app.recorder.start(1000);
-    setButton('capture-start-btn', false);
-    setButton('capture-stop-btn', true);
-    setProgress('audio', 0, '音频提取', '正在捕获音频：0.0 / ' + seconds + ' 秒。');
-    log('开始捕获音频，最长 ' + seconds + ' 秒，录制格式：' + mime + '。');
-    startCaptureTimer(seconds);
-    app.stopTimer = setTimeout(() => stopCapture(), seconds * 1000);
+    await startRecorderFromAudioStream(new MediaStream(tracks), mime, seconds, '媒体音频捕获');
+  }
+
+  async function startTabCapture() {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') {
+      alert('当前浏览器不支持 getDisplayMedia。请用 Chrome 桌面端测试。');
+      log('当前浏览器不支持 getDisplayMedia，不能捕获当前标签页音频。', 'error');
+      return;
+    }
+    if (!window.MediaRecorder) {
+      alert('当前浏览器不支持 MediaRecorder。');
+      return;
+    }
+    const settings = currentSettings();
+    const mime = pickAudioMime();
+    if (!mime) { alert('没有可用音频录制编码。'); return; }
+    stopDisplayCaptureTracks();
+
+    log('即将请求浏览器授权：请选择“当前标签页/This Tab”，并勾选“共享标签页音频/Share tab audio”。', 'warn');
+    setStatus('check-capture', '等待浏览器授权', 'pending');
+    setProgress('audio', 2, '标签页音频捕获', '等待用户在浏览器弹窗中选择当前标签页并共享音频。');
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: true,
+        preferCurrentTab: true,
+        selfBrowserSurface: 'include',
+        systemAudio: 'include',
+        surfaceSwitching: 'exclude'
+      });
+      app.displayStream = stream;
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack && videoTrack.getSettings) {
+        const settings = videoTrack.getSettings();
+        if (settings.displaySurface && settings.displaySurface !== 'browser') {
+          log('当前捕获的不是浏览器标签页，而是：' + settings.displaySurface + '。仍会尝试读取其中音频。', 'warn');
+        } else {
+          log('已获得浏览器标签页捕获流。', 'success');
+        }
+      }
+      const audioTracks = stream.getAudioTracks();
+      if (!audioTracks.length) {
+        stopDisplayCaptureTracks();
+        setStatus('check-capture', '未共享音频', 'bad');
+        setProgress('audio', 0, '标签页音频捕获', '没有拿到音频轨。请重新点击并勾选共享标签页音频。');
+        log('授权完成，但没有音频轨。通常是没有勾选“共享标签页音频”。', 'error');
+        alert('没有捕获到音频轨。请重新点击，并在弹窗里勾选“共享标签页音频”。');
+        return;
+      }
+
+      if (app.ytPlayer && typeof app.ytPlayer.playVideo === 'function') {
+        try {
+          app.ytPlayer.playVideo();
+          log('已请求 YouTube 播放器开始播放。');
+        } catch (error) {
+          log('YouTube playVideo 调用失败：' + error.message, 'warn');
+        }
+      }
+      setStatus('check-capture', '正在捕获标签页音频', 'ok');
+      setProgress('audio', 4, '标签页音频捕获', '已获得音频轨，开始录制当前标签页声音。');
+      await startRecorderFromAudioStream(new MediaStream(audioTracks), mime, settings.seconds, '当前标签页音频捕获');
+    } catch (error) {
+      stopDisplayCaptureTracks();
+      setStatus('check-capture', '授权失败', 'bad');
+      setProgress('audio', 0, '标签页音频捕获失败', error.message);
+      log('标签页音频捕获失败：' + error.message, 'error');
+      alert('标签页音频捕获失败：' + error.message);
+    }
   }
 
   function stopCapture() {
@@ -799,6 +899,7 @@
     $('inspect-btn')?.addEventListener('click', () => inspect(false));
     $('auto-btn')?.addEventListener('click', () => inspect(true));
     $('capture-start-btn')?.addEventListener('click', () => startCapture());
+    $('capture-tab-btn')?.addEventListener('click', () => startTabCapture());
     $('capture-stop-btn')?.addEventListener('click', () => stopCapture());
     $('transcribe-btn')?.addEventListener('click', () => transcribe());
     $('download-audio-btn')?.addEventListener('click', () => downloadAudio());
@@ -815,6 +916,7 @@
     resetOutputs();
     clearLog();
     setButton('capture-start-btn', false);
+    setButton('capture-tab-btn', false);
     setButton('capture-stop-btn', false);
   }
 
