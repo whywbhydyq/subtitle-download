@@ -1,8 +1,7 @@
-const CACHE_NAME = 'subtitle-download-v10-deep-audit-cache';
+const CACHE_NAME = 'subtitle-download-v12-parallel-caption-cache';
 const STATIC_ASSETS = new Set([
   './',
   './index.html',
-  './play.html',
   './404.html',
   './assets/styles.css',
   './assets/subtitle-download.js'
