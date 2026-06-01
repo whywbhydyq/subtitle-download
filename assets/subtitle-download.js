@@ -80,7 +80,10 @@
     pcmBufferedSamples: 0,
     pcmSampleRate: 16000,
     pcmSegmentVideoStart: 0,
-    oneClickAwaitingTabCapture: false
+    oneClickAwaitingTabCapture: false,
+    recoveringSegments: false,
+    transcriptBySegment: new Map(),
+    srtDisabled: true
   };
 
   function timeNow() {
@@ -195,6 +198,8 @@
     app.audioParts = [];
     app.segmentQueue = [];
     app.segmentResults = [];
+    app.recoveringSegments = false;
+    app.transcriptBySegment = new Map();
     stopPcmSegmenter(false);
     app.segmentRecorder = null;
     app.segmentCaptureStream = null;
@@ -803,6 +808,82 @@
     return new Blob([view], { type: 'audio/wav' });
   }
 
+  function resampleLinear(input, inputRate, outputRate) {
+    if (!input || !input.length) return new Float32Array(0);
+    if (!inputRate || !outputRate || Math.abs(inputRate - outputRate) < 1) return input;
+    const ratio = inputRate / outputRate;
+    const outLength = Math.max(1, Math.floor(input.length / ratio));
+    const output = new Float32Array(outLength);
+    for (let i = 0; i < outLength; i += 1) {
+      const src = i * ratio;
+      const left = Math.floor(src);
+      const right = Math.min(input.length - 1, left + 1);
+      const t = src - left;
+      output[i] = input[left] * (1 - t) + input[right] * t;
+    }
+    return output;
+  }
+
+  function audioBufferToMono(buffer) {
+    const length = buffer.length || 0;
+    const channels = buffer.numberOfChannels || 1;
+    const mono = new Float32Array(length);
+    for (let ch = 0; ch < channels; ch += 1) {
+      const data = buffer.getChannelData(ch);
+      for (let i = 0; i < length; i += 1) mono[i] += data[i] / channels;
+    }
+    return mono;
+  }
+
+  async function decodeCapturedBlobToSegments(sessionId) {
+    if (sessionId !== app.segmentSessionId || !app.capturedBlob || app.capturedBlob.size <= 0) return;
+    const settings = currentSettings();
+    const expected = Math.max(1, Math.floor((app.capturedSeconds || 0) / Math.max(5, settings.segmentSeconds || 10)));
+    if (app.capturedSegmentCount >= Math.max(2, Math.floor(expected * 0.8))) return;
+
+    app.recoveringSegments = true;
+    try {
+      setProgress('asr', Math.max(12, Number(($('asr-percent')?.textContent || '0').replace('%', '')) || 12), '补全音频分段', '实时分段不足，正在从完整音频重新切分，确保不是只转第一句。');
+      log('检测到实时分段不足：已有 ' + app.capturedSegmentCount + ' 段，预计约 ' + expected + ' 段；开始从完整音频补充分段。', 'warn');
+      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextCtor) throw new Error('当前浏览器不支持 AudioContext，无法补全分段。');
+      const context = new AudioContextCtor();
+      const arrayBuffer = await app.capturedBlob.arrayBuffer();
+      const decoded = await context.decodeAudioData(arrayBuffer.slice(0));
+      const mono = audioBufferToMono(decoded);
+      const sampleRate = 16000;
+      const pcm = resampleLinear(mono, decoded.sampleRate || sampleRate, sampleRate);
+      try { await context.close(); } catch (_) {}
+
+      const segmentSamples = Math.max(sampleRate * 5, Math.floor((settings.segmentSeconds || 10) * sampleRate));
+      const already = app.capturedSegmentCount;
+      let index = 0;
+      for (let offset = 0; offset < pcm.length; offset += segmentSamples) {
+        index += 1;
+        if (index <= already) continue;
+        const end = Math.min(pcm.length, offset + segmentSamples);
+        const samples = pcm.slice(offset, end);
+        if (samples.length < sampleRate * 0.5) continue;
+        const audioStart = offset / sampleRate;
+        const audioEnd = end / sampleRate;
+        enqueueSegment({
+          index,
+          start: audioStart * (app.capturePlaybackRate || 1),
+          end: audioEnd * (app.capturePlaybackRate || 1),
+          duration: audioEnd - audioStart,
+          blob: encodeWav(samples, sampleRate)
+        });
+      }
+      log('完整音频补充分段完成：当前累计 ' + app.capturedSegmentCount + ' 段。', 'success');
+    } catch (error) {
+      log('完整音频补充分段失败：' + error.message + '。仍继续处理已获得的分段。', 'error');
+    } finally {
+      app.recoveringSegments = false;
+      processSegmentQueue();
+      finishSegmentTranscriptionIfDone();
+    }
+  }
+
   function clearPcmBuffer() {
     app.pcmBuffer = [];
     app.pcmBufferedSamples = 0;
@@ -964,8 +1045,9 @@
     setButton('transcribe-btn', app.capturedBlob.size > 0 || app.segmentQueue.length > 0);
     setButton('download-txt-btn', Boolean(app.transcriptText));
     updateOneClickButton();
-    setProgress('audio', 100, '音频提取', '音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒，共 ' + app.capturedSegmentCount + ' 段。');
-    log('音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒，共 ' + app.capturedSegmentCount + ' 段；剩余分段会继续转写并追加到纯文本结果。', 'success');
+    setProgress('audio', 100, '音频提取', '音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒，已切出 ' + app.capturedSegmentCount + ' 段。');
+    log('音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒，已切出 ' + app.capturedSegmentCount + ' 段；剩余分段会继续转写并追加到纯文本结果。', 'success');
+    decodeCapturedBlobToSegments(sessionId);
     processSegmentQueue();
     finishSegmentTranscriptionIfDone();
   }
@@ -1330,44 +1412,42 @@
     return Object.assign({}, stabilityOptions, baseOptions);
   }
 
+  function renderTranscriptOnly() {
+    const parts = Array.from(app.transcriptBySegment.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map((entry) => String(entry[1] || '').trim())
+      .filter(Boolean);
+    app.transcriptText = parts.join('\n');
+    const transcript = $('transcript-output');
+    if (transcript) {
+      transcript.value = app.transcriptText;
+      transcript.scrollTop = transcript.scrollHeight;
+    }
+    setButton('download-txt-btn', Boolean(app.transcriptText));
+    updateOneClickButton();
+  }
+
   function appendSegmentTranscript(segment, output, settings) {
     const rawChunks = settings.timestampMode === 'accurate' ? normalizeChunks(output) : [];
     let text = String(output && output.text ? output.text : rawChunks.map((x) => x.text).join(' ')).trim();
     if (!text) text = '';
 
-    let srtChunks;
-    if (rawChunks.length) {
-      srtChunks = rawChunks.map((chunk) => ({
-        start: segment.start + chunk.start,
-        end: segment.start + chunk.end,
-        text: chunk.text
-      }));
-    } else if (text) {
-      srtChunks = [{ start: segment.start, end: segment.end, text }];
-    } else {
-      srtChunks = [];
-    }
-
     if (text) {
-      app.transcriptText = app.transcriptText ? (app.transcriptText + '\n' + text) : text;
+      app.transcriptBySegment.set(segment.index, text);
       if (settings.language === 'auto' && app.transcribedSegmentCount === 0) {
         const hasCjk = /[\u3400-\u9fff]/.test(text);
         const hasLatin = /[A-Za-z]/.test(text);
         log('首段语言输出检测：' + (hasCjk ? '包含中文' : hasLatin ? '主要为英文/拉丁字符' : '未检测到明显中英文字符') + '。自动模式会保持原文转写；如果语言判断错误，请切换为“强制中文原文”或“强制英文原文”后重跑。');
       }
     }
-    app.segmentResults.push(...srtChunks);
-    app.transcriptSrt = chunksToSrt(app.segmentResults, app.transcriptText);
-    $('transcript-output').value = app.transcriptText;
-    $('srt-output').value = app.transcriptSrt;
-    setButton('download-txt-btn', Boolean(app.transcriptText));
-    setButton('download-srt-btn', Boolean(app.transcriptSrt));
-    updateOneClickButton();
+
+    // 产品当前只显示纯文本：不再生成或展示时间戳，避免用户看到 SRT 时间轴。
+    renderTranscriptOnly();
   }
 
   function finishSegmentTranscriptionIfDone() {
     const captureActive = app.recorder && app.recorder.state !== 'inactive';
-    if (app.segmentProcessing || app.segmentQueue.length) return;
+    if (app.recoveringSegments || app.segmentProcessing || app.segmentQueue.length) return;
     if (captureActive && !app.segmentStopRequested) {
       const doneText = app.transcribedSegmentCount > 0
         ? '已转写 ' + app.transcribedSegmentCount + ' 段，等待下一段音频。'

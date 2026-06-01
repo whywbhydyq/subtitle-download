@@ -1,4 +1,4 @@
-const CACHE_NAME = 'subtitle-download-v6-one-button-pcm-cache';
+const CACHE_NAME = 'subtitle-download-v7-one-button-fulltext-cache';
 const STATIC_ASSETS = [
   './',
   './index.html',

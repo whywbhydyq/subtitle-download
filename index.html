@@ -15,8 +15,6 @@
     <section id="app" class="app-grid" aria-label="subtitle-download 应用">
       <div class="panel">
         <div class="panel-inner">
-          <h1 class="compact-title">subtitle-download</h1>
-
           <div class="form-row">
             <label for="source-url">视频 / 音频链接</label>
             <input id="source-url" class="input" type="url" spellcheck="false" value="https://www.youtube.com/watch?v=gLvLqvVxIco" placeholder="https://www.youtube.com/watch?v=... 或 https://example.com/video.mp4">
@@ -45,14 +43,14 @@
               </select>
             </div>
             <div class="form-row">
-              <label for="capture-seconds">捕获时长 / 秒</label>
+              <label for="capture-seconds">最长捕获时长 / 秒</label>
               <input id="capture-seconds" class="input" type="number" min="0" max="14400" value="0" style="font-family:inherit" title="0 表示不按秒数截断，直到视频结束或手动停止">
               <div class="field-hint">0 = 全长；填数字 = 只捕获指定秒数。</div>
             </div>
             <div class="form-row">
               <label for="segment-seconds">分段转写 / 秒</label>
               <input id="segment-seconds" class="input" type="number" min="5" max="120" value="10" style="font-family:inherit" title="长视频会边录边按这个长度切段转文字">
-              <div class="field-hint">默认 10 秒：更快追加完整文本。</div>
+              <div class="field-hint">默认 10 秒：先出结果；转写会持续追加全部文本。</div>
             </div>
             <div class="form-row">
               <label for="playback-rate">捕获播放倍速</label>
@@ -74,12 +72,6 @@
 
           <div class="actions single-action">
             <button id="one-click-btn" class="btn btn-green" type="button">开始检测、捕获并转文字</button>
-            <button id="inspect-btn" class="btn btn-primary hidden" type="button">检测链接并尝试播放</button>
-            <button id="auto-btn" class="btn btn-green hidden" type="button">检测后自动捕获并转文字</button>
-            <button id="prewarm-btn" class="btn btn-outline hidden" type="button">预热模型缓存</button>
-            <button id="capture-start-btn" class="btn btn-amber hidden" type="button">开始捕获媒体音频</button>
-            <button id="capture-tab-btn" class="btn btn-amber hidden" type="button">捕获当前标签页音频</button>
-            <button id="capture-stop-btn" class="btn btn-dark hidden" type="button">停止并识别</button>
           </div>
 
           <div class="status-grid" aria-label="链接检测结果">
@@ -118,7 +110,6 @@
           <div class="downloads single-download">
             <button id="download-audio-btn" class="btn btn-outline hidden" type="button">下载音频</button>
             <button id="download-txt-btn" class="btn btn-outline" type="button">下载 TXT</button>
-            <button id="download-srt-btn" class="btn btn-outline hidden" type="button">下载 SRT</button>
           </div>
         </div>
       </div>
@@ -136,7 +127,6 @@
             <div id="diagnostics-log" class="log" data-empty="true"><div class="line">[等待] 粘贴链接后点击“开始检测、捕获并转文字”。</div></div>
           </div>
         </div>
-        <textarea id="srt-output" class="hidden" readonly></textarea>
       </aside>
     </section>
   </main>
