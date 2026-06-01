@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>M3U8转MP4 - 免费在线视频格式转换工具</title>
+  <meta name="description" content="免费将M3U8视频流转换为MP4格式。在线转换，无需安装软件，支持下载M3U8视频为MP4文件，保留原始画质，简单快捷。">
+  <meta name="robots" content="index, follow">
+  
+    <meta name="google-adsense-account" content="ca-pub-1653188471819736">
+<link rel="canonical" href="https://m3u8player.gitlcp.com/m3u8_to_mp4/">
+  <link rel="icon" type="image/png" href="/images/ic-play.png">
+  
+  <!-- Preconnect -->
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mux.js/dist/mux.min.js"></script>
+  <script src="/assets/m3u8-mp4-converter.js"></script>
+
+<!-- Open Graph -->
+  <meta property="og:title" content="M3U8转MP4 - 免费在线视频格式转换工具">
+  <meta property="og:description" content="免费将M3U8视频流转换为MP4格式，在线转换，无需安装软件。">
+  <meta property="og:image" content="https://m3u8player.gitlcp.com/images/ic-play.png">
+  <meta property="og:url" content="https://m3u8player.gitlcp.com/m3u8_to_mp4/">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="M3U8在线播放器">
+  
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="M3U8转MP4 - 免费在线转换工具">
+  <meta name="twitter:description" content="将M3U8视频流转换为MP4格式，在线转换，简单快捷。">
+  <meta name="twitter:image" content="https://m3u8player.gitlcp.com/images/ic-play.png">
+  
+  <!-- JSON-LD -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "M3U8转MP4工具",
+    "description": "免费将M3U8视频流转换为MP4格式",
+    "url": "https://m3u8player.gitlcp.com/m3u8_to_mp4/",
+    "applicationCategory": "VideoApplication",
+    "operatingSystem": "Any"
+  }
+  </script>
+  
+  <!-- AdSense -->
+  <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1653188471819736" crossorigin="anonymous"></script>
+  
+  <style>
+    :root { 
+      --primary: #667eea; 
+      --primary-dark: #5a67d8; 
+      --text: #2d3748; 
+      --bg: #f7fafc; 
+      --white: #fff;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+      background: var(--bg); 
+      color: var(--text); 
+      line-height: 1.6; 
+    }
+    .container { max-width: 1000px; margin: 0 auto; padding: 0 20px; }
+    
+    /* Header */
+    header { 
+      background: var(--white); 
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+      position: sticky; 
+      top: 0; 
+      z-index: 100; 
+    }
+    nav { 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center; 
+      height: 64px; 
+    }
+    .logo { 
+      display: flex; 
+      align-items: center; 
+      gap: 8px; 
+      text-decoration: none; 
+      color: var(--text); 
+      font-weight: 700; 
+      font-size: 20px; 
+    }
+    .logo img { width: 32px; height: 32px; }
+    .nav-links { display: flex; gap: 24px; list-style: none; }
+    .nav-links a { 
+      text-decoration: none; 
+      color: var(--text); 
+      font-weight: 500; 
+    }
+    .nav-links a:hover { color: var(--primary); }
+    
+    /* Main */
+    main { padding: 40px 0; }
+    h1 { 
+      font-size: 28px; 
+      text-align: center; 
+      margin-bottom: 8px; 
+      color: var(--text); 
+    }
+    .subtitle { 
+      text-align: center; 
+      color: #718096; 
+      margin-bottom: 32px; 
+    }
+    
+    /* Converter */
+    .converter { 
+      background: var(--white); 
+      padding: 32px; 
+      border-radius: 12px; 
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08); 
+      margin-bottom: 24px; 
+    }
+    .input-group { 
+      display: flex; 
+      gap: 12px; 
+      margin-bottom: 20px; 
+    }
+    .input-group input { 
+      flex: 1; 
+      padding: 14px 18px; 
+      border: 2px solid #e2e8f0; 
+      border-radius: 8px; 
+      font-size: 16px; 
+      transition: border-color 0.2s; 
+      background: #fff; 
+      color: #2d3748; 
+    }
+    @media (prefers-color-scheme: dark) {
+      .input-group input { background: #1a202c; color: #e2e8f0; border-color: #4a5568; }
+      .option input, .option select { background: #1a202c; color: #e2e8f0; border-color: #4a5568; }
+      .converter { background: #1a202c; }
+      .feature { background: #1a202c; }
+      .steps { background: #1a202c; }
+      body { background: #0d1117; color: #e2e8f0; }
+      .status.info { background: #1a365d; color: #90cdf4; }
+      .status.error { background: #742a2a; color: #feb2b2; }
+      .status.success { background: #22543d; color: #9ae6b4; }
+    }
+    .input-group input:focus { 
+      outline: none; 
+      border-color: var(--primary); 
+    }
+    .btn { 
+      padding: 14px 32px; 
+      border: none; 
+      border-radius: 8px; 
+      font-size: 16px; 
+      font-weight: 600; 
+      cursor: pointer; 
+      transition: all 0.2s; 
+    }
+    .btn-primary { 
+      background: var(--primary); 
+      color: var(--white); 
+    }
+    .btn-primary:hover { background: var(--primary-dark); }
+    .btn-primary:disabled { 
+      background: #a0aec0; 
+      cursor: not-allowed; 
+    }
+    
+    /* Options */
+    .options { 
+      display: grid; 
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+      gap: 16px; 
+      margin-bottom: 20px; 
+    }
+    .option { 
+      display: flex; 
+      flex-direction: column; 
+      gap: 6px; 
+    }
+    .option label { 
+      font-size: 14px; 
+      font-weight: 500; 
+      color: #718096; 
+    }
+    .option input, .option select { 
+      padding: 10px 14px; 
+      border: 1px solid #e2e8f0; 
+      border-radius: 6px; 
+      font-size: 14px; 
+    }
+    
+    /* Progress */
+    .progress-container { 
+      display: none; 
+      margin-top: 24px; 
+    }
+    .progress-container.active { display: block; }
+    .progress-bar { 
+      height: 8px; 
+      background: #e2e8f0; 
+      border-radius: 4px; 
+      overflow: hidden; 
+    }
+    .progress-fill { 
+      height: 100%; 
+      background: var(--primary); 
+      width: 0%; 
+      transition: width 0.3s; 
+    }
+    .progress-text { 
+      text-align: center; 
+      margin-top: 8px; 
+      font-size: 14px; 
+      color: #718096; 
+    }
+    
+    /* Status */
+    .status { 
+      padding: 16px; 
+      border-radius: 8px; 
+      margin-top: 16px; 
+      display: none; 
+    }
+    .status.info { 
+      background: #ebf8ff; 
+      color: #3182ce; 
+      display: block; 
+    }
+    .status.error { 
+      background: #fed7d7; 
+      color: #c53030; 
+      display: block; 
+    }
+    .status.success { 
+      background: #c6f6d5; 
+      color: #276749; 
+      display: block; 
+    }
+    
+    /* Features */
+    .features { 
+      display: grid; 
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); 
+      gap: 20px; 
+      margin-top: 32px; 
+    }
+    .feature { 
+      background: var(--white); 
+      padding: 24px; 
+      border-radius: 12px; 
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08); 
+      text-align: center; 
+    }
+    .feature-icon { 
+      font-size: 40px; 
+      margin-bottom: 12px; 
+    }
+    .feature h3 { 
+      font-size: 18px; 
+      margin-bottom: 8px; 
+      color: var(--text); 
+    }
+    .feature p { 
+      color: #718096; 
+      font-size: 14px; 
+    }
+    
+    /* Steps */
+    .steps { 
+      background: var(--white); 
+      padding: 32px; 
+      border-radius: 12px; 
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08); 
+      margin-top: 24px; 
+    }
+    .steps h2 { 
+      font-size: 22px; 
+      margin-bottom: 24px; 
+      text-align: center; 
+    }
+    .step-list { 
+      display: grid; 
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+      gap: 20px; 
+      list-style: none; 
+    }
+    .step { 
+      text-align: center; 
+      padding: 20px; 
+    }
+    .step-number { 
+      display: inline-flex; 
+      align-items: center; 
+      justify-content: center; 
+      width: 40px; 
+      height: 40px; 
+      background: var(--primary); 
+      color: var(--white); 
+      border-radius: 50%; 
+      font-weight: 700; 
+      margin-bottom: 12px; 
+    }
+    .step h4 { 
+      font-size: 16px; 
+      margin-bottom: 8px; 
+    }
+    .step p { 
+      color: #718096; 
+      font-size: 14px; 
+    }
+    
+    /* Ad */
+    .ad-container { 
+      text-align: center; 
+      padding: 20px 0; 
+      min-height: 90px; 
+    }
+    
+    /* Footer */
+    footer { 
+      background: #2d3748; 
+      color: var(--white); 
+      padding: 40px 0 20px; 
+      margin-top: 60px; 
+    }
+    .footer-content { 
+      display: grid; 
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+      gap: 32px; 
+      margin-bottom: 32px; 
+    }
+    .footer-section h3 { font-size: 16px; margin-bottom: 16px; }
+    .footer-section ul { list-style: none; }
+    .footer-section li { margin-bottom: 8px; }
+    .footer-section a { 
+      color: #a0aec0; 
+      text-decoration: none; 
+    }
+    .footer-section a:hover { color: var(--white); }
+    .footer-bottom { 
+      border-top: 1px solid #4a5568; 
+      padding-top: 20px; 
+      text-align: center; 
+      color: #a0aec0; 
+      font-size: 14px; 
+    }
+    
+    @media (max-width: 768px) {
+      .nav-links { display: none; }
+      h1 { font-size: 22px; }
+      .converter { padding: 24px; }
+      .input-group { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <nav class="container">
+      <a href="/" class="logo">
+        <img src="/images/ic-play.png" alt="M3U8播放器">
+        <span>M3U8播放器</span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="/">首页</a></li>
+        <li><a href="/player.html">在线播放</a></li>
+        <li><a href="/m3u8_to_mp4/">转MP4</a></li>
+        <li><a href="/about.html">关于</a></li>
+        <li><a href="/contact.html">联系</a></li>
+      </ul>
+    </nav>
+  </header>
+  
+  <main>
+    <div class="container">
+      <h1>M3U8转MP4</h1>
+      <p class="subtitle">免费将M3U8视频流转换为MP4格式，在线转换，无需安装软件</p>
+      
+      <div class="converter">
+        <div class="input-group">
+          <input type="text" id="urlInput" placeholder="请输入M3U8视频链接...">
+          <button class="btn btn-primary" id="convertBtn" onclick="startConversion()">开始转换</button>
+        </div>
+        
+        <div class="options">
+          <div class="option">
+            <label for="filename">文件名（可选）</label>
+            <input type="text" id="filename" placeholder="video.mp4" value="video.mp4">
+          </div>
+          <div class="option">
+            <label for="quality">画质选择</label>
+            <select id="quality">
+              <option value="auto">自动（推荐）</option>
+              <option value="high">高画质</option>
+              <option value="medium">中画质</option>
+            </select>
+          </div>
+        </div>
+        
+        <video id="hiddenVideo" style="display:none" muted playsinline></video>
+      <div class="progress-container" id="progressContainer">
+          <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <div class="progress-text" id="progressText">准备转换...</div>
+        </div>
+        
+        <div id="status" class="status"></div>
+      </div>
+      
+      <!-- Ad -->
+      <div class="ad-container">
+        <ins class="adsbygoogle"
+             style="display:block"
+             data-ad-client="ca-pub-1653188471819736"
+             data-ad-slot="1234567892"
+             data-ad-format="auto"
+             data-full-width-responsive="true"></ins>
+        <script>(adsbygoogle = window.adsbygoogle || []).push({});</script>
+      </div>
+      
+      <section class="features">
+        <article class="feature">
+          <div class="feature-icon">🆓</div>
+          <h3>完全免费</h3>
+          <p>无需付费，无转换次数限制，无水印</p>
+        </article>
+        <article class="feature">
+          <div class="feature-icon">🔒</div>
+          <h3>安全私密</h3>
+          <p>纯浏览器端处理，视频不会上传到服务器</p>
+        </article>
+        <article class="feature">
+          <div class="feature-icon">⚡</div>
+          <h3>快速转换</h3>
+          <p>直接合并或转封装M3U8分片，输出真实MP4文件</p>
+        </article>
+        <article class="feature">
+          <div class="feature-icon">🎥</div>
+          <h3>高画质</h3>
+          <p>保留原始视频画质，支持1080P和4K</p>
+        </article>
+      </section>
+      
+      <section class="steps">
+        <h2>使用步骤</h2>
+        <ol class="step-list">
+          <li class="step">
+            <div class="step-number">1</div>
+            <h4>复制链接</h4>
+            <p>复制M3U8视频的播放链接</p>
+          </li>
+          <li class="step">
+            <div class="step-number">2</div>
+            <h4>粘贴链接</h4>
+            <p>将链接粘贴到上方输入框</p>
+          </li>
+          <li class="step">
+            <div class="step-number">3</div>
+            <h4>开始转换</h4>
+            <p>点击开始转换按钮，浏览器会读取并处理视频分片</p>
+          </li>
+          <li class="step">
+            <div class="step-number">4</div>
+            <h4>下载视频</h4>
+            <p>转换完成后下载MP4文件</p>
+          </li>
+        </ol>
+      </section>
+    </div>
+  </main>
+  
+  <footer>
+    <div class="container">
+      <div class="footer-content">
+        <div class="footer-section">
+          <h3>工具</h3>
+          <ul>
+            <li><a href="/player.html">M3U8播放器</a></li>
+            <li><a href="/m3u8_to_mp4/">M3U8转MP4</a></li>
+          </ul>
+        </div>
+        <div class="footer-section">
+          <h3>文章</h3>
+          <ul>
+            <li><a href="/post/1001.html">什么是m3u8协议</a></li>
+            <li><a href="/post/1002.html">播放M3U8视频</a></li>
+            <li><a href="/post/1003.html">M3U8与MP4区别</a></li>
+            <li><a href="/post/1004.html">HLS流媒体技术</a></li>
+          </ul>
+        </div>
+        <div class="footer-section">
+          <h3>关于</h3>
+          <ul>
+            <li><a href="/about.html">关于我们</a></li>
+            <li><a href="/privacy.html">隐私政策</a></li>
+            <li><a href="/terms.html">服务条款</a></li>
+            <li><a href="/disclaimer.html">免责声明</a></li>
+            <li><a href="/contact.html">联系我们</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <p>&copy; 2019-2026 M3U8在线播放器 | 联系邮箱: <a href="mailto:2922027393@qq.com">2922027393@qq.com</a></p>
+      </div>
+    </div>
+  </footer>
+  
+  <script>
+    var convertedBlob = null;
+    var convertedFilename = null;
+
+    function showStatus(message, type) {
+      var status = document.getElementById('status');
+      status.textContent = message;
+      status.className = 'status ' + type;
+    }
+
+    function updateProgress(percent, text) {
+      var container = document.getElementById('progressContainer');
+      var fill = document.getElementById('progressFill');
+      var textEl = document.getElementById('progressText');
+      container.classList.add('active');
+      fill.style.width = percent + '%';
+      textEl.textContent = text;
+    }
+
+    async function startConversion() {
+      var url = document.getElementById('urlInput').value.trim();
+      var btn = document.getElementById('convertBtn');
+      var filename = document.getElementById('filename').value.trim();
+      var quality = document.getElementById('quality').value;
+      if (!url) { showStatus('请输入M3U8视频链接', 'error'); return; }
+
+      btn.disabled = true;
+      btn.textContent = '转换中...';
+      convertedBlob = null;
+      convertedFilename = null;
+      showStatus('正在读取M3U8清单...', 'info');
+      updateProgress(2, '正在读取M3U8清单...');
+
+      try {
+        var result = await M3U8Mp4Converter.convert(url, {
+          quality: quality,
+          filename: filename || ('converted-' + Date.now() + '.mp4'),
+          onProgress: function(percent, message) {
+            updateProgress(percent, message);
+          }
+        });
+        convertedBlob = result.blob;
+        convertedFilename = result.filename;
+        updateProgress(100, '转换完成！');
+        showStatus('转换完成！模式: ' + result.mode + '，分片: ' + result.segments + '，文件大小: ' + (result.blob.size / (1024 * 1024)).toFixed(2) + ' MB', 'success');
+        M3U8Mp4Converter.downloadBlob(result.blob, result.filename);
+      } catch (error) {
+        updateProgress(100, '转换失败');
+        showStatus('转换失败：' + error.message, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '开始转换';
+      }
+    }
+
+    document.getElementById('urlInput').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') startConversion();
+    });
+  </script>
+</body>
+</html>
