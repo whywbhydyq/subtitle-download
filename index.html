@@ -15,10 +15,10 @@
     <section id="app" class="app-grid" aria-label="subtitle-download 应用">
       <div class="panel">
         <div class="panel-inner">
-          <div class="form-row">
+          <div class="form-row no-top-margin">
             <label for="source-url">视频 / 音频链接</label>
             <input id="source-url" class="input" type="url" spellcheck="false" value="https://www.youtube.com/watch?v=gLvLqvVxIco" placeholder="https://www.youtube.com/watch?v=... 或 https://example.com/video.mp4">
-            <div class="badges" style="margin-top:6px">
+            <div class="badges compact-badges">
               <button type="button" class="badge" data-example="https://www.youtube.com/watch?v=gLvLqvVxIco">YouTube 示例</button>
               <button type="button" class="badge" data-example="https://storage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4">MP4 示例</button>
               <button type="button" class="badge" data-example="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3">MP3 示例</button>
@@ -30,10 +30,11 @@
             <div class="form-row">
               <label for="language-select">识别语言</label>
               <select id="language-select" class="select">
-                <option value="auto" selected>自动识别原文语言</option>
+                <option value="auto" selected>自动中英原文</option>
                 <option value="zh">强制中文原文</option>
                 <option value="en">强制英文原文</option>
               </select>
+              <div class="field-hint">自动模式会优先用视频标题和首段结果纠错，避免中文讲解被识别成英文。</div>
             </div>
             <div class="form-row">
               <label for="model-select">本地模型</label>
@@ -49,24 +50,18 @@
             </div>
             <div class="form-row">
               <label for="segment-seconds">分段转写 / 秒</label>
-              <input id="segment-seconds" class="input" type="number" min="5" max="120" value="10" style="font-family:inherit" title="长视频会边录边按这个长度切段转文字">
-              <div class="field-hint">默认 10 秒：先出结果；转写会持续追加全部文本。</div>
+              <input id="segment-seconds" class="input" type="number" min="5" max="90" value="30" style="font-family:inherit" title="长视频会边录边按这个长度切段转文字">
+              <div class="field-hint">默认 30 秒，长视频总吞吐更高；想更快看到首段可调 8-12。</div>
             </div>
             <div class="form-row">
               <label for="playback-rate">捕获播放倍速</label>
               <select id="playback-rate" class="select">
                 <option value="1">1x 最稳</option>
                 <option value="1.25">1.25x</option>
-                <option value="1.5">1.5x</option>
+                <option value="1.5">1.5x 平衡</option>
                 <option value="2" selected>2x 极速</option>
               </select>
-              <div class="field-hint">中文识别不稳时改 1x；追求速度用 2x。</div>
-            </div>
-            <div class="form-row hidden">
-              <label for="timestamp-mode">输出模式</label>
-              <select id="timestamp-mode" class="select">
-                <option value="fast" selected>纯文本输出</option>
-              </select>
+              <div class="field-hint">默认 2x 优先速度；中文识别不稳时降到 1x/1.25x。</div>
             </div>
           </div>
 
@@ -74,19 +69,24 @@
             <button id="one-click-btn" class="btn btn-green" type="button">开始检测、捕获并转文字</button>
           </div>
 
+          <div class="secondary-actions">
+            <button id="open-player-btn" class="btn btn-outline" type="button">在独立播放页打开</button>
+            <button id="prewarm-btn" class="btn btn-outline" type="button">手动预热本地模型</button>
+          </div>
+
           <div class="status-grid" aria-label="链接检测结果">
             <div class="status-card"><div class="status-label">链接类型</div><div id="check-type" class="status-value pending">未检测</div></div>
             <div class="status-card"><div class="status-label">连接</div><div id="check-connect" class="status-value pending">未检测</div></div>
             <div class="status-card"><div class="status-label">可操作</div><div id="check-control" class="status-value pending">未检测</div></div>
-            <div class="status-card"><div class="status-label">可播放</div><div id="check-play" class="status-value pending">未检测</div></div>
-            <div class="status-card"><div class="status-label">可捕获音频</div><div id="check-capture" class="status-value pending">未检测</div></div>
+            <div class="status-card"><div class="status-label">播放能力</div><div id="check-play" class="status-value pending">未检测</div></div>
+            <div class="status-card"><div class="status-label">音频来源</div><div id="check-capture" class="status-value pending">未检测</div></div>
           </div>
 
           <div class="progress-stack" aria-label="处理进度">
             <div class="progress-box">
               <div class="progress-top"><span id="overall-label">总进度</span><span id="overall-percent">0%</span></div>
               <div class="track"><div id="overall-bar" class="bar"></div></div>
-              <p id="overall-detail" class="subtle" style="margin:8px 0 0;font-size:13px">等待检测。</p>
+              <p id="overall-detail" class="subtle" style="margin:8px 0 0;font-size:13px">等待开始。</p>
             </div>
             <div class="progress-box">
               <div class="progress-top"><span id="audio-label">音频提取</span><span id="audio-percent">0%</span></div>
@@ -94,17 +94,15 @@
               <p id="audio-detail" class="subtle" style="margin:8px 0 0;font-size:13px">等待捕获。</p>
             </div>
             <div class="progress-box">
-              <div class="progress-top"><span id="asr-label">ASR 识别</span><span id="asr-percent">0%</span></div>
+              <div class="progress-top"><span id="asr-label">转文字</span><span id="asr-percent">0%</span></div>
               <div class="track"><div id="asr-bar" class="bar"></div></div>
-              <p id="asr-detail" class="subtle" style="margin:8px 0 0;font-size:13px">等待捕获完成；模型会在后台预热缓存。</p>
+              <p id="asr-detail" class="subtle" style="margin:8px 0 0;font-size:13px">YouTube 会先尝试直取已有字幕；没有字幕才走标签页音频捕获和本地 ASR。</p>
             </div>
           </div>
 
-          <div id="native-panel" class="media-shell">
-            <video id="media-element" controls crossorigin="anonymous" playsinline></video>
-          </div>
-          <div id="youtube-panel" class="media-shell hidden">
-            <div id="youtube-player" style="width:100%;height:100%"></div>
+          <div id="diagnostic-media-host" class="diagnostic-media-host" aria-hidden="true">
+            <video id="media-element" crossorigin="anonymous" playsinline muted></video>
+            <div id="youtube-player"></div>
           </div>
 
           <div class="downloads single-download">
@@ -118,7 +116,7 @@
         <div class="panel">
           <div class="panel-inner">
             <h3>识别结果</h3>
-            <textarea id="transcript-output" class="textarea result-textarea" readonly placeholder="这里只显示纯文本，不显示时间戳。长视频会按分段持续追加，直到全部完成。"></textarea>
+            <textarea id="transcript-output" class="textarea result-textarea" readonly placeholder="这里只显示纯文本，不显示时间戳。长视频会持续追加，直到全部完成。"></textarea>
           </div>
         </div>
         <div class="panel">

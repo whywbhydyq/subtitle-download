@@ -12,7 +12,7 @@
     'base:en': ['onnx-community/whisper-base.en', 'Xenova/whisper-base.en']
   };
 
-  const YT_STATE_LABELS = {
+  const YT_STATE = {
     '-1': '未开始',
     '0': '已结束',
     '1': '播放中',
@@ -24,69 +24,65 @@
   const app = {
     currentKind: 'none',
     currentUrl: '',
+    youtubeId: '',
+    youtubeTitle: '',
+    languageHint: '',
     hls: null,
     ytPlayer: null,
-    ytHostSeq: 0,
     ytApiPromise: null,
-    mediaReadyForCapture: false,
+    mediaReady: false,
+    displayStream: null,
+    captureStream: null,
     recorder: null,
-    chunks: [],
-    captureTimer: null,
-    stopTimer: null,
-    transcribeTimer: null,
-    captureStartedAt: 0,
-    capturedSeconds: 0,
+    recorderMime: '',
+    currentChunks: [],
+    allAudioParts: [],
+    completedAudioBytes: 0,
+    failedSegmentCount: 0,
+    currentSegmentIndex: 0,
+    currentSegmentStartMedia: 0,
+    currentSegmentActiveMs: 0,
+    currentSegmentLastTick: 0,
+    captureActive: false,
+    captureStopping: false,
+    capturePaused: false,
+    captureStartWall: 0,
+    captureBaseMediaTime: 0,
     captureTargetSeconds: 0,
-    captureHardLimitSeconds: 0,
+    captureWallLimitSeconds: 0,
+    capturePlaybackRate: 1,
+    lastMediaTime: 0,
+    lastMediaAdvanceAt: 0,
+    watchdogTimer: null,
+    captureTimer: null,
+    hardStopTimer: null,
+    segmentQueue: [],
+    segmentProcessing: false,
+    capturedSegmentCount: 0,
+    transcribedSegmentCount: 0,
+    transcribedMediaSeconds: 0,
+    transcriptBySegment: new Map(),
+    transcriptText: '',
     capturedBlob: null,
     capturedUrl: '',
-    displayStream: null,
-    captureMode: '',
-    transcriptText: '',
-    transcriptSrt: '',
+    asrRunId: 0,
     transcriber: null,
     transcriberKey: '',
     transcriberCache: new Map(),
     transcriberPromises: new Map(),
+    isWarming: false,
     isTranscribing: false,
-    isWarmingModel: false,
     warmupTimer: null,
     serviceWorkerReady: false,
-    asrRunId: 0,
-    segmentSessionId: 0,
-    segmentMode: true,
-    segmentSeconds: 10,
-    segmentRecorder: null,
-    segmentTimer: null,
-    segmentStartedAt: 0,
-    segmentIndex: 0,
-    segmentQueue: [],
-    segmentProcessing: false,
-    segmentStopRequested: false,
-    segmentCaptureStream: null,
-    segmentMime: '',
-    segmentResults: [],
-    audioParts: [],
-    capturedSegmentCount: 0,
-    transcribedSegmentCount: 0,
-    transcribedSeconds: 0,
-    captureBaseMediaTime: 0,
-    capturePlaybackRate: 1,
-    pcmContext: null,
-    pcmSource: null,
-    pcmProcessor: null,
-    pcmGain: null,
-    pcmBuffer: [],
-    pcmBufferedSamples: 0,
-    pcmSampleRate: 16000,
-    pcmSegmentVideoStart: 0,
-    oneClickAwaitingTabCapture: false,
-    recoveringSegments: false,
-    transcriptBySegment: new Map(),
-    srtDisabled: true
+    oneClickState: 'idle',
+    captionFastPathUsed: false,
+    firstSegmentLanguageDecisionDone: false,
+    resetSerial: 0,
+    lastCaptionTracks: [],
+    lastCaptureError: ''
   };
 
-  function timeNow() {
+  function nowLabel() {
     return new Date().toLocaleTimeString('zh-CN', { hour12: false });
   }
 
@@ -99,7 +95,7 @@
     }
     const line = document.createElement('div');
     line.className = 'line ' + (type === 'success' ? 'success' : type === 'error' ? 'error' : type === 'warn' ? 'warning' : '');
-    line.textContent = '[' + timeNow() + '] ' + message;
+    line.textContent = '[' + nowLabel() + '] ' + message;
     box.appendChild(line);
     box.scrollTop = box.scrollHeight;
   }
@@ -111,23 +107,6 @@
     box.innerHTML = '<div class="line">[等待] 粘贴链接后点击“开始检测、捕获并转文字”。</div>';
   }
 
-
-  async function registerServiceWorker() {
-    if (!('serviceWorker' in navigator)) {
-      log('当前浏览器不支持 Service Worker，模型只能依赖浏览器默认缓存。', 'warn');
-      return;
-    }
-    try {
-      const registration = await navigator.serviceWorker.register('sw.js');
-      await navigator.serviceWorker.ready;
-      app.serviceWorkerReady = true;
-      log('离线缓存服务已就绪：模型文件会尽量持久缓存，避免每次重复下载。', 'success');
-      if (registration && registration.update) registration.update().catch(() => {});
-    } catch (error) {
-      log('离线缓存服务注册失败：' + error.message, 'warn');
-    }
-  }
-
   function setStatus(id, text, state = 'pending') {
     const el = $(id);
     if (!el) return;
@@ -135,109 +114,111 @@
     el.className = 'status-value ' + state;
   }
 
-  function setButton(id, enabled) {
-    const el = $(id);
-    if (!el) return;
-    el.disabled = !enabled;
-  }
-
   function setProgress(kind, percent, label, detail) {
     const safe = Math.max(0, Math.min(100, Number(percent) || 0));
     const bar = $(kind + '-bar');
     const pct = $(kind + '-percent');
-    const name = $(kind + '-label');
+    const title = $(kind + '-label');
     const text = $(kind + '-detail');
     if (bar) bar.style.width = safe + '%';
     if (pct) pct.textContent = Math.round(safe) + '%';
-    if (name && label) name.textContent = label;
+    if (title && label) title.textContent = label;
     if (text && detail) text.textContent = detail;
   }
 
-  function resetProgress() {
-    setProgress('overall', 0, '总进度', '等待检测。');
-    setProgress('audio', 0, '音频提取', '等待捕获。');
-    setProgress('asr', 0, 'ASR 识别', '等待捕获完成；模型会在后台预热缓存。');
+  function setButton(id, enabled) {
+    const el = $(id);
+    if (el) el.disabled = !enabled;
   }
 
   function formatBytes(bytes) {
     if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
     const units = ['B', 'KB', 'MB', 'GB'];
-    let size = bytes;
-    let i = 0;
-    while (size >= 1024 && i < units.length - 1) {
-      size /= 1024;
-      i += 1;
+    let value = bytes;
+    let index = 0;
+    while (value >= 1024 && index < units.length - 1) {
+      value /= 1024;
+      index += 1;
     }
-    return size.toFixed(i === 0 ? 0 : 2) + ' ' + units[i];
+    return value.toFixed(index === 0 ? 0 : 2) + ' ' + units[index];
   }
 
   function resetChecks() {
-    setStatus('check-type', '检测中', 'pending');
-    setStatus('check-connect', '等待', 'pending');
-    setStatus('check-control', '等待', 'pending');
-    setStatus('check-play', '等待', 'pending');
-    setStatus('check-capture', '等待', 'pending');
+    setStatus('check-type', '未检测', 'pending');
+    setStatus('check-connect', '未检测', 'pending');
+    setStatus('check-control', '未检测', 'pending');
+    setStatus('check-play', '未检测', 'pending');
+    setStatus('check-capture', '未检测', 'pending');
+  }
+
+  function resetProgress() {
+    setProgress('overall', 0, '总进度', '等待开始。');
+    setProgress('audio', 0, '音频提取', '等待捕获。');
+    setProgress('asr', 0, '转文字', 'YouTube 会先尝试直取已有字幕；没有字幕才走标签页音频捕获和本地 ASR。');
   }
 
   function resetOutputs() {
     app.asrRunId += 1;
-    app.segmentSessionId += 1;
-    app.isTranscribing = false;
-    app.segmentProcessing = false;
-    app.segmentStopRequested = false;
-    clearInterval(app.transcribeTimer);
-    clearTimeout(app.segmentTimer);
-    app.transcribeTimer = null;
-    app.segmentTimer = null;
-    if (app.capturedUrl) URL.revokeObjectURL(app.capturedUrl);
-    app.captureMode = '';
-    app.oneClickAwaitingTabCapture = false;
-    app.capturedUrl = '';
-    app.capturedBlob = null;
-    app.chunks = [];
-    app.audioParts = [];
+    app.resetSerial += 1;
+    app.oneClickState = 'idle';
+    app.captionFastPathUsed = false;
+    app.firstSegmentLanguageDecisionDone = false;
+    app.lastCaptionTracks = [];
+    app.lastCaptureError = '';
     app.segmentQueue = [];
-    app.segmentResults = [];
-    app.recoveringSegments = false;
-    app.transcriptBySegment = new Map();
-    stopPcmSegmenter(false);
-    app.segmentRecorder = null;
-    app.segmentCaptureStream = null;
-    app.segmentIndex = 0;
+    app.segmentProcessing = false;
+    app.isTranscribing = false;
+    app.isWarming = false;
     app.capturedSegmentCount = 0;
     app.transcribedSegmentCount = 0;
-    app.transcribedSeconds = 0;
-    app.capturedSeconds = 0;
+    app.transcribedMediaSeconds = 0;
+    app.transcriptBySegment = new Map();
     app.transcriptText = '';
-    app.transcriptSrt = '';
+    app.capturedBlob = null;
+    if (app.capturedUrl) URL.revokeObjectURL(app.capturedUrl);
+    app.capturedUrl = '';
+    app.allAudioParts = [];
+    app.completedAudioBytes = 0;
+    app.failedSegmentCount = 0;
+    app.currentChunks = [];
     const transcript = $('transcript-output');
-    const srt = $('srt-output');
     if (transcript) transcript.value = '';
-    if (srt) srt.value = '';
-    ['download-audio-btn', 'download-txt-btn', 'download-srt-btn', 'transcribe-btn', 'capture-tab-btn'].forEach((id) => setButton(id, false));
+    setButton('download-audio-btn', false);
+    setButton('download-txt-btn', false);
   }
 
-  function teardownNativeMedia() {
-    const media = $('media-element');
-    if (app.hls) {
-      app.hls.destroy();
-      app.hls = null;
+  function resetForNewRun() {
+    stopTimers();
+    const recorder = app.recorder;
+    app.recorder = null;
+    app.captureActive = false;
+    app.captureStopping = false;
+    app.capturePaused = false;
+    if (recorder) {
+      try { recorder.ondataavailable = null; } catch (_) {}
+      try { recorder.onerror = null; } catch (_) {}
+      try { recorder.onstop = null; } catch (_) {}
+      try { if (recorder.state !== 'inactive') recorder.stop(); } catch (_) {}
     }
-    if (media) {
-      try { media.pause(); } catch (_) {}
-      media.removeAttribute('src');
-      media.load();
-    }
-    app.mediaReadyForCapture = false;
+    stopDisplayCaptureTracks();
+    stopCaptureStreamTracks();
+    pauseSourcePlayback();
+    stopNativeMedia();
+    stopYouTubePlayer();
+    resetChecks();
+    resetProgress();
+    resetOutputs();
+    clearLog();
+    updateOneClickButton();
   }
 
-  function teardownYouTube() {
-    if (app.ytPlayer && typeof app.ytPlayer.destroy === 'function') {
-      try { app.ytPlayer.destroy(); } catch (_) {}
-    }
-    app.ytPlayer = null;
-    const host = $('youtube-player');
-    if (host) host.innerHTML = '';
+  function stopTimers() {
+    clearInterval(app.watchdogTimer);
+    clearInterval(app.captureTimer);
+    clearTimeout(app.hardStopTimer);
+    app.watchdogTimer = null;
+    app.captureTimer = null;
+    app.hardStopTimer = null;
   }
 
   function stopDisplayCaptureTracks() {
@@ -248,14 +229,47 @@
     app.displayStream = null;
   }
 
-  function showNative() {
-    $('native-panel')?.classList.remove('hidden');
-    $('youtube-panel')?.classList.add('hidden');
+  function stopCaptureStreamTracks() {
+    if (!app.captureStream) return;
+    app.captureStream.getTracks().forEach((track) => {
+      try { track.onended = null; } catch (_) {}
+      try { track.stop(); } catch (_) {}
+    });
+    app.captureStream = null;
   }
 
-  function showYouTube() {
-    $('native-panel')?.classList.add('hidden');
-    $('youtube-panel')?.classList.remove('hidden');
+  function pauseSourcePlayback() {
+    try {
+      if (app.currentKind === 'youtube' && app.ytPlayer && typeof app.ytPlayer.pauseVideo === 'function') {
+        app.ytPlayer.pauseVideo();
+        return;
+      }
+      const media = $('media-element');
+      if (media && !media.paused) media.pause();
+    } catch (_) {}
+  }
+
+  function stopNativeMedia() {
+    const media = $('media-element');
+    if (app.hls) {
+      try { app.hls.destroy(); } catch (_) {}
+      app.hls = null;
+    }
+    if (media) {
+      try { media.pause(); } catch (_) {}
+      media.removeAttribute('src');
+      media.load();
+    }
+    app.mediaReady = false;
+  }
+
+  function stopYouTubePlayer() {
+    if (app.ytPlayer && typeof app.ytPlayer.destroy === 'function') {
+      try { app.ytPlayer.destroy(); } catch (_) {}
+    }
+    app.ytPlayer = null;
+    const host = $('youtube-player');
+    if (host) host.innerHTML = '';
   }
 
   function parseYouTubeId(input) {
@@ -278,46 +292,76 @@
     if (youtubeId) return { kind: 'youtube', label: 'YouTube 页面链接', youtubeId };
     try {
       const url = new URL(input);
-      const pathname = decodeURIComponent(url.pathname).toLowerCase();
-      if (/\.m3u8($|\?)/i.test(pathname) || /m3u8/i.test(input)) return { kind: 'hls', label: 'HLS / M3U8 媒体流' };
-      if (/\.(mp4|webm|mov|m4v|ogg|ogv)($|\?)/i.test(pathname)) return { kind: 'video', label: '视频直链' };
-      if (/\.(mp3|wav|m4a|aac|flac|opus|oga)($|\?)/i.test(pathname)) return { kind: 'audio', label: '音频直链' };
+      const path = decodeURIComponent(url.pathname).toLowerCase();
+      if (/\.m3u8($|\?)/i.test(path) || /m3u8/i.test(input)) return { kind: 'hls', label: 'HLS / M3U8 媒体流' };
+      if (/\.(mp4|webm|mov|m4v|ogg|ogv)($|\?)/i.test(path)) return { kind: 'video', label: '视频直链' };
+      if (/\.(mp3|wav|m4a|aac|flac|opus|oga)($|\?)/i.test(path)) return { kind: 'audio', label: '音频直链' };
       return { kind: 'page', label: '普通网页 / 未知媒体' };
     } catch (_) {
       return { kind: 'invalid', label: '无效链接' };
     }
   }
 
-  async function probeHttp(input, kind) {
-    if (kind === 'youtube') {
-      return { ok: true, state: 'ok', message: 'YouTube 使用 IFrame API 诊断，不读取网页源码。' };
-    }
-    if (kind === 'invalid') {
-      return { ok: false, state: 'bad', message: 'URL 格式无效。' };
-    }
-    if (kind === 'page') {
-      return { ok: false, state: 'warn', message: '这不是媒体直链；浏览器不能从普通网页拆出音频。' };
-    }
+  function currentSettings() {
+    const rawSeconds = Number($('capture-seconds')?.value);
+    const seconds = Number.isFinite(rawSeconds) && rawSeconds > 0 ? Math.max(5, Math.min(14400, rawSeconds)) : 0;
+    const rawSegment = Number($('segment-seconds')?.value);
+    const segmentSeconds = Number.isFinite(rawSegment) && rawSegment > 0 ? Math.max(5, Math.min(90, rawSegment)) : 20;
+    const rawRate = Number($('playback-rate')?.value);
+    const playbackRate = Number.isFinite(rawRate) ? Math.max(1, Math.min(2, rawRate)) : 1.5;
+    return {
+      language: $('language-select')?.value || 'auto',
+      model: $('model-select')?.value || 'tiny',
+      seconds,
+      segmentSeconds,
+      playbackRate
+    };
+  }
+
+  async function registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
     try {
-      const method = kind === 'hls' ? 'GET' : 'HEAD';
-      const res = await fetch(input, { method, mode: 'cors', cache: 'no-store' });
-      if (!res.ok) return { ok: false, state: 'bad', message: 'HTTP ' + res.status + ' ' + res.statusText };
-      const type = res.headers.get('content-type') || '未知 Content-Type';
-      const size = Number(res.headers.get('content-length'));
-      if (kind === 'hls') {
-        const text = await res.clone().text();
-        if (!/^#EXTM3U/m.test(text.trim())) return { ok: false, state: 'warn', message: '可连接，但返回内容不像 HLS 清单。' };
-        const segments = (text.match(/#EXTINF/g) || []).length;
-        return { ok: true, state: 'ok', message: 'HLS 清单可读，片段标记 ' + segments + ' 个。' };
-      }
-      return { ok: true, state: 'ok', message: 'HTTP 可连接：' + type + (size ? '，' + formatBytes(size) : '') };
+      const registration = await navigator.serviceWorker.register('sw.js');
+      await navigator.serviceWorker.ready;
+      app.serviceWorkerReady = true;
+      log('缓存服务已就绪：页面、运行库和模型文件会尽量复用缓存。', 'success');
+      if (registration && registration.update) registration.update().catch(() => {});
     } catch (error) {
-      return { ok: false, state: 'warn', message: 'fetch/CORS 检测失败：' + error.message + '。继续尝试媒体元素播放。' };
+      log('缓存服务注册失败：' + error.message, 'warn');
     }
   }
 
-  function waitForMedia(media, timeoutMs = 15000) {
-    if (media.readyState >= 1) return Promise.resolve({ ok: true, event: 'readyState' });
+  function openPlayerPage() {
+    const input = ($('source-url')?.value || '').trim();
+    if (!input) {
+      alert('请输入链接。');
+      return;
+    }
+    window.open('play.html?url=' + encodeURIComponent(input), '_blank', 'noopener,noreferrer');
+  }
+
+  async function probeHttp(input, kind) {
+    if (kind === 'youtube') return { ok: true, state: 'ok', message: 'YouTube 走 IFrame API 和字幕接口，不读取 iframe 音频流。' };
+    if (kind === 'invalid') return { ok: false, state: 'bad', message: 'URL 格式无效。' };
+    if (kind === 'page') return { ok: false, state: 'warn', message: '普通网页不是可直接解码的媒体源。' };
+    try {
+      const method = kind === 'hls' ? 'GET' : 'HEAD';
+      const response = await fetch(input, { method, mode: 'cors', cache: 'no-store' });
+      if (!response.ok) return { ok: false, state: 'bad', message: 'HTTP ' + response.status + ' ' + response.statusText };
+      const type = response.headers.get('content-type') || '未知 Content-Type';
+      if (kind === 'hls') {
+        const text = await response.clone().text();
+        const ok = /^#EXTM3U/m.test(text.trim());
+        return { ok, state: ok ? 'ok' : 'warn', message: ok ? 'HLS 清单可读。' : '可连接，但返回内容不像 HLS 清单。' };
+      }
+      return { ok: true, state: 'ok', message: 'HTTP 可连接：' + type };
+    } catch (error) {
+      return { ok: false, state: 'warn', message: 'fetch/CORS 检测失败：' + error.message + '。继续尝试媒体元素。' };
+    }
+  }
+
+  function waitForMediaMetadata(media, timeoutMs = 15000) {
+    if (media.readyState >= 1) return Promise.resolve({ ok: true });
     return new Promise((resolve) => {
       let settled = false;
       const finish = (result) => {
@@ -329,13 +373,13 @@
         media.removeEventListener('error', onError);
         resolve(result);
       };
-      const onReady = (event) => finish({ ok: true, event: event.type });
+      const onReady = () => finish({ ok: true });
       const onError = () => {
         const map = { 1: '加载被中止', 2: '网络错误', 3: '解码失败', 4: '格式不支持或跨域受限' };
-        const reason = media.error ? (map[media.error.code] || '错误码 ' + media.error.code) : '未知错误';
-        finish({ ok: false, event: 'error', reason });
+        const reason = media.error ? (map[media.error.code] || ('错误码 ' + media.error.code)) : '未知错误';
+        finish({ ok: false, reason });
       };
-      const timer = setTimeout(() => finish({ ok: false, event: 'timeout', reason: '媒体元数据加载超时' }), timeoutMs);
+      const timer = setTimeout(() => finish({ ok: false, reason: '媒体元数据加载超时' }), timeoutMs);
       media.addEventListener('loadedmetadata', onReady, { once: true });
       media.addEventListener('canplay', onReady, { once: true });
       media.addEventListener('error', onError, { once: true });
@@ -349,103 +393,68 @@
   }
 
   function pickAudioMime() {
-    const list = [
-      'audio/webm;codecs=opus',
-      'audio/webm',
-      'audio/mp4;codecs=mp4a.40.2',
-      'audio/mp4'
-    ];
     if (!window.MediaRecorder) return '';
-    return list.find((type) => MediaRecorder.isTypeSupported(type)) || '';
+    const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4;codecs=mp4a.40.2', 'audio/mp4'];
+    return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || '';
   }
 
-  function detectCaptureCapability(media) {
-    const stream = getCaptureStream(media);
-    if (!stream) return { ok: false, state: 'warn', message: '浏览器不支持 captureStream()。' };
-    const tracks = stream.getAudioTracks();
-    if (!tracks.length) return { ok: false, state: 'warn', message: '已创建捕获流，但没有检测到音轨。' };
-    const mime = pickAudioMime();
-    if (!mime) return { ok: false, state: 'warn', message: '检测到音轨，但 MediaRecorder 没有可用音频编码。' };
-    return { ok: true, state: 'ok', message: '可捕获音频，音轨 ' + tracks.length + ' 条，格式 ' + mime + '。' };
-  }
-
-  async function loadNativeMedia(input, kind) {
-    showNative();
-    teardownYouTube();
-    teardownNativeMedia();
+  async function inspectNative(input, kind) {
+    stopYouTubePlayer();
+    stopNativeMedia();
     app.currentKind = kind;
     app.currentUrl = input;
+    app.mediaReady = false;
     const media = $('media-element');
     if (!media) throw new Error('页面缺少媒体元素。');
     media.crossOrigin = 'anonymous';
-    media.controls = true;
-    media.muted = false;
+    media.muted = true;
+    media.controls = false;
     setStatus('check-control', 'HTMLMediaElement 可操作', 'ok');
-    log('媒体元素已创建，可执行 play / pause / seek 等操作。', 'success');
-    setProgress('overall', 18, '播放检测', '正在加载媒体。');
+    setStatus('check-play', '检测中', 'pending');
+    setProgress('overall', 20, '媒体检测', '正在加载元数据，默认不会自动播放。');
 
     if (kind === 'hls') {
       if (window.Hls && window.Hls.isSupported()) {
         app.hls = new window.Hls({ enableWorker: true, backBufferLength: 30 });
         app.hls.loadSource(input);
         app.hls.attachMedia(media);
-        log('hls.js 已接管媒体加载，开始解析 HLS 清单。');
-        await new Promise((resolve, reject) => {
-          let settled = false;
-          const done = (ok, value) => {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timer);
-            ok ? resolve(value) : reject(value);
-          };
-          const timer = setTimeout(() => done(false, new Error('HLS 清单解析超时。')), 15000);
-          app.hls.on(window.Hls.Events.MANIFEST_PARSED, (_event, data) => {
-            const levels = data && data.levels ? data.levels.length : 0;
-            log('HLS 清单解析完成，清晰度层级 ' + levels + ' 个。', 'success');
-            done(true, data);
-          });
-          app.hls.on(window.Hls.Events.ERROR, (_event, data) => {
-            if (data && data.fatal) done(false, new Error(data.details || data.type || 'HLS fatal error'));
-          });
-        });
       } else if (media.canPlayType('application/vnd.apple.mpegurl')) {
         media.src = input;
-        media.load();
-        log('浏览器原生 HLS 能力可用。', 'success');
       } else {
-        throw new Error('当前浏览器不能播放 HLS；hls.js 未加载或不可用。');
+        throw new Error('当前浏览器不能播放 HLS。');
       }
     } else {
       media.src = input;
-      media.load();
-      log('媒体直链已赋给播放器。');
     }
-
-    setProgress('overall', 30, '播放检测', '等待媒体元数据。');
-    const metadata = await waitForMedia(media, 15000);
+    media.load();
+    const metadata = await waitForMediaMetadata(media, 15000);
     if (!metadata.ok) throw new Error(metadata.reason || '媒体无法加载。');
+    setStatus('check-play', '可播放（默认暂停）', 'ok');
     const duration = Number.isFinite(media.duration) ? media.duration.toFixed(1) + ' 秒' : '直播/未知时长';
-    log('元数据已加载：' + duration + '。', 'success');
+    log('媒体元数据加载完成：' + duration + '。默认保持暂停，不在首页播放。', 'success');
 
-    setProgress('overall', 42, '播放检测', '正在尝试播放。');
-    try {
-      await media.play();
-      setStatus('check-play', '可播放', 'ok');
-      log('play() 成功，媒体正在播放。', 'success');
-    } catch (error) {
-      setStatus('check-play', '需手动播放', 'warn');
-      log('浏览器阻止自动播放：' + error.message + '。请手动点击播放器播放。', 'warn');
-      setProgress('overall', 48, '播放检测', '已加载，但需要手动播放后再捕获。');
+    const stream = getCaptureStream(media);
+    if (!stream) {
+      setStatus('check-capture', '浏览器不支持 captureStream', 'warn');
+      app.mediaReady = false;
       return false;
     }
-
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    const capture = detectCaptureCapability(media);
-    setStatus('check-capture', capture.ok ? '可捕获' : '不可捕获', capture.state);
-    log(capture.message, capture.ok ? 'success' : 'warn');
-    app.mediaReadyForCapture = capture.ok;
-    setProgress('overall', capture.ok ? 58 : 50, '检测完成', capture.ok ? '媒体可播放且可捕获音频。' : capture.message);
-    return capture.ok;
+    const tracks = stream.getAudioTracks();
+    if (!tracks.length) {
+      setStatus('check-capture', '未检测到音轨', 'warn');
+      app.mediaReady = false;
+      return false;
+    }
+    const mime = pickAudioMime();
+    if (!mime) {
+      setStatus('check-capture', '无可用录制编码', 'warn');
+      app.mediaReady = false;
+      return false;
+    }
+    setStatus('check-capture', '可捕获媒体音频', 'ok');
+    app.mediaReady = true;
+    setProgress('overall', 46, '媒体检测完成', '媒体可播放并可捕获音频；点击主按钮会开始播放、捕获、转文字。');
+    return true;
   }
 
   function loadYouTubeApi() {
@@ -453,7 +462,7 @@
     if (app.ytApiPromise) return app.ytApiPromise;
     app.ytApiPromise = new Promise((resolve, reject) => {
       const previous = window.onYouTubeIframeAPIReady;
-      const timer = setTimeout(() => reject(new Error('YouTube IFrame API 加载超时，可能被网络或扩展拦截。')), 15000);
+      const timer = setTimeout(() => reject(new Error('YouTube IFrame API 加载超时。')), 15000);
       window.onYouTubeIframeAPIReady = function() {
         clearTimeout(timer);
         if (typeof previous === 'function') {
@@ -472,114 +481,283 @@
     return app.ytApiPromise;
   }
 
-  async function inspectYouTube(input, id) {
-    showYouTube();
-    teardownNativeMedia();
-    teardownYouTube();
+  function inferLanguageHintFromText(text) {
+    const value = String(text || '');
+    if (/[\u3400-\u9fff]/.test(value)) return 'zh';
+    if (/[A-Za-z]/.test(value)) return 'en';
+    return '';
+  }
+
+  async function inspectYouTube(input, youtubeId) {
+    stopNativeMedia();
+    stopYouTubePlayer();
     app.currentKind = 'youtube';
     app.currentUrl = input;
-    app.mediaReadyForCapture = false;
-    setStatus('check-connect', '加载 API 中', 'pending');
+    app.youtubeId = youtubeId;
+    app.youtubeTitle = '';
+    app.languageHint = '';
+    setStatus('check-connect', '加载 IFrame API', 'pending');
     setStatus('check-control', '等待播放器', 'pending');
-    setStatus('check-play', '等待事件', 'pending');
-    setStatus('check-capture', '需授权标签页音频', 'warn');
-    setButton('capture-tab-btn', false);
-    setProgress('overall', 10, 'YouTube 检测', '正在加载 YouTube IFrame API。');
-    log('YouTube 视频 ID：' + id + '。');
-    log('YouTube 是跨源 iframe 播放器；不能直接读取 iframe 内部音频，但可以在用户授权后捕获当前标签页音频。', 'warn');
+    setStatus('check-play', '默认暂停', 'pending');
+    setStatus('check-capture', '优先直取字幕', 'pending');
+    setProgress('overall', 12, 'YouTube 检测', '正在加载 YouTube IFrame API，默认不会自动播放。');
+    log('YouTube 视频 ID：' + youtubeId + '。');
 
     const api = await loadYouTubeApi();
     setStatus('check-connect', 'IFrame API 已连接', 'ok');
-    setProgress('overall', 22, 'YouTube 检测', 'API 已连接，正在创建播放器。');
-    log('YouTube IFrame API 已连接。', 'success');
-
     const host = $('youtube-player');
-    app.ytHostSeq += 1;
-    const hostId = 'youtube-player-inner-' + app.ytHostSeq;
-    host.innerHTML = '<div id="' + hostId + '"></div>';
+    const innerId = 'youtube-player-hidden-' + Date.now();
+    host.innerHTML = '<div id="' + innerId + '"></div>';
 
     await new Promise((resolve, reject) => {
       let ready = false;
       const timer = setTimeout(() => {
         if (!ready) reject(new Error('YouTube 播放器 ready 超时。'));
       }, 15000);
-      app.ytPlayer = new api.Player(hostId, {
-        videoId: id,
-        width: '100%',
-        height: '100%',
-        playerVars: { playsinline: 1, origin: window.location.origin, rel: 0 },
+      app.ytPlayer = new api.Player(innerId, {
+        videoId: youtubeId,
+        width: '1',
+        height: '1',
+        playerVars: { playsinline: 1, origin: window.location.origin, rel: 0, controls: 0, disablekb: 1 },
         events: {
           onReady: (event) => {
             ready = true;
             clearTimeout(timer);
             setStatus('check-control', '可操作', 'ok');
-            setProgress('overall', 36, 'YouTube 播放', '播放器 ready，正在尝试播放。');
-            log('YouTube 播放器 ready：可调用 playVideo / pauseVideo / seekTo。', 'success');
+            setStatus('check-play', '可播放（默认暂停）', 'ok');
+            setStatus('check-capture', '字幕优先 / 可授权标签页音频', 'warn');
+            setProgress('overall', 28, 'YouTube 检测完成', '播放器 ready。默认保持暂停；需要捕获时才开始播放。');
             try {
               const data = event.target.getVideoData ? event.target.getVideoData() : null;
-              if (data && data.title) log('视频标题：' + data.title, 'success');
+              if (data && data.title) {
+                app.youtubeTitle = data.title;
+                app.languageHint = inferLanguageHintFromText(data.title);
+                log('视频标题：' + data.title, 'success');
+                if (app.languageHint === 'zh') log('标题包含中文：自动模式会优先按中文原文识别。', 'success');
+              }
             } catch (_) {}
-            try { event.target.playVideo(); } catch (error) { log('playVideo 调用失败：' + error.message, 'warn'); }
             resolve();
           },
           onStateChange: (event) => {
-            const label = YT_STATE_LABELS[String(event.data)] || ('状态码 ' + event.data);
+            const label = YT_STATE[String(event.data)] || ('状态码 ' + event.data);
             log('YouTube 播放状态：' + label + '。');
-            if (event.data === 1) {
-              setStatus('check-play', '可播放', 'ok');
-              setProgress('overall', 52, 'YouTube 播放', 'YouTube 正在播放；iframe 不能直接捕获，需使用标签页音频授权。');
-            } else if (event.data === 0) {
-              setStatus('check-play', '已结束', 'ok');
-              if (app.recorder && app.recorder.state !== 'inactive' && app.captureMode === '当前标签页音频捕获') {
-                log('YouTube 视频已结束，自动停止标签页音频捕获。', 'success');
-                stopCapture();
-              }
-            } else if (event.data === 3) {
-              setStatus('check-play', '缓冲中', 'pending');
-              setProgress('overall', 44, 'YouTube 播放', 'YouTube 正在缓冲。');
-            } else if (event.data === 2) {
-              setStatus('check-play', '已暂停', 'warn');
-            }
+            if (event.data === 0 && app.captureActive) stopCapture();
           },
           onError: (event) => {
-            const reason = 'YouTube 错误码 ' + event.data;
-            setStatus('check-play', '播放失败', 'bad');
-            setProgress('overall', 100, 'YouTube 失败', reason);
-            log(reason, 'error');
+            setStatus('check-play', '播放错误 ' + event.data, 'bad');
+            log('YouTube 播放错误：' + event.data, 'error');
           }
         }
       });
     });
-
-    setStatus('check-capture', '可授权捕获标签页', 'warn');
-    setButton('capture-tab-btn', true);
-    setProgress('audio', 0, '音频提取', '等待点击“捕获当前标签页音频”。默认会录到视频结束或手动停止；也可以填写指定秒数。');
-    setProgress('asr', 0, 'ASR 识别', '捕获完成后会自动开始本地转文字。');
-    log('结论：该 YouTube 链接可连接、可操作；下一步点击“捕获当前标签页音频”，授权后即可录制标签页声音并转文字。', 'success');
-    return false;
+    return true;
   }
 
-  function currentSettings() {
-    const rawSeconds = Number($('capture-seconds')?.value);
-    const seconds = Number.isFinite(rawSeconds) && rawSeconds > 0
-      ? Math.max(5, Math.min(14400, rawSeconds))
-      : 0;
-    const rawSegmentSeconds = Number($('segment-seconds')?.value);
-    const segmentSeconds = Number.isFinite(rawSegmentSeconds) && rawSegmentSeconds > 0
-      ? Math.max(5, Math.min(120, rawSegmentSeconds))
-      : 10;
-    return {
-      language: $('language-select')?.value || 'auto',
-      model: $('model-select')?.value || 'tiny',
-      seconds,
-      unlimitedCapture: seconds === 0,
-      segmentSeconds,
-      timestampMode: $('timestamp-mode')?.value || 'fast',
-      playbackRate: Math.max(1, Math.min(2, Number($('playback-rate')?.value) || 1))
-    };
+  function captionCacheKey(videoId, track) {
+    return 'subtitle-download:caption:v2:' + [videoId, track.lang || '', track.name || '', track.kind || ''].join(':');
   }
 
-  function getCurrentMediaPositionSeconds() {
+  function readCaptionCache(videoId, track) {
+    try {
+      const raw = localStorage.getItem(captionCacheKey(videoId, track));
+      if (!raw) return '';
+      const parsed = JSON.parse(raw);
+      if (!parsed || !parsed.text) return '';
+      return String(parsed.text || '');
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function writeCaptionCache(videoId, track, text) {
+    try {
+      const value = String(text || '');
+      if (!value.trim() || value.length > 600000) return;
+      localStorage.setItem(captionCacheKey(videoId, track), JSON.stringify({ t: Date.now(), text: value }));
+    } catch (_) {}
+  }
+
+  async function tryYouTubeCaptions(youtubeId) {
+    const settings = currentSettings();
+    const browserPrefersZh = /^zh/i.test(navigator.language || '');
+    const preferred = settings.language === 'zh' ? ['zh', 'zh-Hans', 'zh-CN', 'zh-Hant']
+      : settings.language === 'en' ? ['en']
+      : app.languageHint === 'zh' || browserPrefersZh ? ['zh', 'zh-Hans', 'zh-CN', 'zh-Hant', 'en']
+      : ['en', 'zh', 'zh-Hans', 'zh-CN', 'zh-Hant'];
+    setProgress('asr', 4, 'YouTube 字幕直取', '正在检查 YouTube 是否已有字幕/自动字幕。');
+    log('优先尝试 YouTube 已有字幕；成功时无需录音、无需本地 ASR，速度最快。');
+    try {
+      const tracks = await fetchYouTubeCaptionTracks(youtubeId);
+      app.lastCaptionTracks = tracks;
+      if (!tracks.length) throw new Error('没有返回可读字幕轨。');
+      const selected = chooseCaptionTrack(tracks, preferred);
+      if (!selected) throw new Error('没有匹配的中英文字幕轨。');
+      log('找到字幕轨：' + selected.display + ' / ' + selected.lang + (selected.kind ? ' / ' + selected.kind : '') + '。', 'success');
+      let text = readCaptionCache(youtubeId, selected);
+      if (text) {
+        log('命中本地字幕缓存：直接复用，不重新下载字幕轨。', 'success');
+      } else {
+        setProgress('asr', 18, 'YouTube 字幕直取', '正在下载字幕轨：' + selected.display + '。');
+        text = await fetchCaptionText(youtubeId, selected);
+        writeCaptionCache(youtubeId, selected, text);
+      }
+      if (!text || text.trim().length < 2) throw new Error('字幕轨为空。');
+      app.captionFastPathUsed = true;
+      app.transcriptText = cleanTranscriptText(text);
+      const output = $('transcript-output');
+      if (output) output.value = app.transcriptText;
+      setButton('download-txt-btn', true);
+      setStatus('check-capture', '已直取字幕，无需捕获音频', 'ok');
+      setProgress('audio', 100, '音频提取跳过', '已直接读取 YouTube 字幕，不需要捕获标签页音频。');
+      setProgress('asr', 100, '字幕已完成', '已输出纯文本：' + app.transcriptText.length + ' 字符。');
+      setProgress('overall', 100, '完成', 'YouTube 已有字幕直取完成。');
+      log('YouTube 字幕直取完成：' + app.transcriptText.length + ' 字符。', 'success');
+      updateOneClickButton();
+      return true;
+    } catch (error) {
+      log('YouTube 字幕直取不可用：' + error.message + '。将改用当前标签页音频捕获。', 'warn');
+      setProgress('asr', 0, '等待音频捕获', '没有可直取字幕，下一步需要授权捕获当前标签页音频。');
+      return false;
+    }
+  }
+
+  async function fetchYouTubeCaptionTracks(youtubeId) {
+    const endpoints = [
+      'https://video.google.com/timedtext',
+      'https://www.youtube.com/api/timedtext'
+    ];
+    const hls = ['zh-CN', 'zh-Hans', 'en', navigator.language || 'en'];
+    const seen = new Set();
+    const errors = [];
+    for (const endpoint of endpoints) {
+      for (const hl of hls) {
+        const url = new URL(endpoint);
+        url.searchParams.set('type', 'list');
+        url.searchParams.set('v', youtubeId);
+        url.searchParams.set('hl', hl);
+        const key = url.toString();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        try {
+          const response = await fetch(key, { mode: 'cors', cache: 'no-store' });
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          const xmlText = await response.text();
+          const tracks = parseCaptionTrackList(xmlText);
+          if (tracks.length) return tracks;
+        } catch (error) {
+          errors.push(endpoint + ': ' + error.message);
+        }
+      }
+    }
+    if (errors.length) throw new Error(errors.slice(0, 2).join('；'));
+    return [];
+  }
+
+  function parseCaptionTrackList(xmlText) {
+    const doc = new DOMParser().parseFromString(xmlText || '', 'application/xml');
+    const tracks = Array.from(doc.querySelectorAll('track')).map((node) => ({
+      lang: node.getAttribute('lang_code') || '',
+      name: node.getAttribute('name') || '',
+      kind: node.getAttribute('kind') || '',
+      display: node.getAttribute('lang_translated') || node.getAttribute('lang_original') || node.getAttribute('lang_code') || ''
+    })).filter((track) => track.lang);
+    const seen = new Set();
+    return tracks.filter((track) => {
+      const key = [track.lang, track.name, track.kind].join('\u0001');
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function chooseCaptionTrack(tracks, preferredLangs) {
+    const normalized = tracks.map((track) => Object.assign({}, track, { langLower: track.lang.toLowerCase() }));
+    const preferHuman = (items) => items.find((track) => track.kind !== 'asr') || items[0];
+    for (const lang of preferredLangs) {
+      const lower = lang.toLowerCase();
+      const exacts = normalized.filter((track) => track.langLower === lower);
+      if (exacts.length) return preferHuman(exacts);
+      const prefixes = normalized.filter((track) => track.langLower.startsWith(lower + '-') || track.langLower.startsWith(lower));
+      if (prefixes.length) return preferHuman(prefixes);
+    }
+    const zh = normalized.filter((track) => /^zh/i.test(track.lang));
+    if (zh.length) return preferHuman(zh);
+    const en = normalized.filter((track) => /^en/i.test(track.lang));
+    if (en.length) return preferHuman(en);
+    return normalized[0];
+  }
+
+  async function fetchCaptionText(videoId, track) {
+    const endpoints = ['https://video.google.com/timedtext', 'https://www.youtube.com/api/timedtext'];
+    const formats = ['json3', 'vtt', ''];
+    let lastError;
+    for (const endpoint of endpoints) {
+      for (const fmt of formats) {
+        const url = new URL(endpoint);
+        url.searchParams.set('v', videoId);
+        url.searchParams.set('lang', track.lang);
+        if (track.name) url.searchParams.set('name', track.name);
+        if (track.kind) url.searchParams.set('kind', track.kind);
+        if (fmt) url.searchParams.set('fmt', fmt);
+        try {
+          const response = await fetch(url.toString(), { mode: 'cors', cache: 'no-store' });
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          if (fmt === 'json3') {
+            const json = await response.json();
+            const text = parseJson3Captions(json);
+            if (text.trim()) return text;
+          } else {
+            const raw = await response.text();
+            const text = fmt === 'vtt' ? parseVttCaptions(raw) : parseXmlCaptions(raw);
+            if (text.trim()) return text;
+          }
+        } catch (error) {
+          lastError = error;
+        }
+      }
+    }
+    throw lastError || new Error('字幕下载失败。');
+  }
+
+  function parseVttCaptions(vtt) {
+    return String(vtt || '')
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter((line) => line && !/^WEBVTT/i.test(line) && !/^Kind:/i.test(line) && !/^Language:/i.test(line) && !/-->/i.test(line) && !/^\d+$/.test(line))
+      .map((line) => line.replace(/<[^>]+>/g, '').trim())
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  function parseXmlCaptions(xml) {
+    const doc = new DOMParser().parseFromString(xml || '', 'application/xml');
+    return Array.from(doc.querySelectorAll('text')).map((node) => node.textContent || '').join('\n');
+  }
+
+  function parseJson3Captions(json) {
+    const events = Array.isArray(json && json.events) ? json.events : [];
+    return events.map((event) => {
+      const segs = Array.isArray(event.segs) ? event.segs : [];
+      return segs.map((seg) => seg.utf8 || '').join('');
+    }).join('\n');
+  }
+
+  function cleanTranscriptText(text) {
+    const lines = String(text || '')
+      .replace(/\r/g, '\n')
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .split(/\n+/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const deduped = [];
+    for (const line of lines) {
+      if (line && line !== deduped[deduped.length - 1]) deduped.push(line);
+    }
+    return deduped.join('\n').trim();
+  }
+
+  function getMediaTime() {
     try {
       if (app.currentKind === 'youtube' && app.ytPlayer && typeof app.ytPlayer.getCurrentTime === 'function') {
         const t = Number(app.ytPlayer.getCurrentTime());
@@ -591,7 +769,7 @@
     return 0;
   }
 
-  function getMediaDurationSeconds() {
+  function getMediaDuration() {
     try {
       if (app.currentKind === 'youtube' && app.ytPlayer && typeof app.ytPlayer.getDuration === 'function') {
         const d = Number(app.ytPlayer.getDuration());
@@ -603,558 +781,267 @@
     return 0;
   }
 
-  function applyCapturePlaybackRate() {
+  function isMediaPaused() {
+    try {
+      if (app.currentKind === 'youtube' && app.ytPlayer && typeof app.ytPlayer.getPlayerState === 'function') {
+        const state = app.ytPlayer.getPlayerState();
+        return state === 2 || state === 0 || state === -1;
+      }
+      const media = $('media-element');
+      return !media || media.paused || media.ended;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function applyPlaybackRate() {
     const settings = currentSettings();
-    const rate = settings.playbackRate || 1;
-    app.capturePlaybackRate = rate;
+    const wanted = settings.playbackRate || 1;
+    app.capturePlaybackRate = wanted;
     try {
       if (app.currentKind === 'youtube' && app.ytPlayer) {
-        if (typeof app.ytPlayer.getAvailablePlaybackRates === 'function' && typeof app.ytPlayer.setPlaybackRate === 'function') {
-          const available = app.ytPlayer.getAvailablePlaybackRates() || [];
-          const selected = available.length ? available.reduce((best, x) => Math.abs(x - rate) < Math.abs(best - rate) ? x : best, available[0]) : rate;
-          app.ytPlayer.setPlaybackRate(selected);
-          app.capturePlaybackRate = Number(selected) || rate;
-          log('捕获播放倍速已设置为 ' + app.capturePlaybackRate + 'x。', 'success');
-          return app.capturePlaybackRate;
-        }
+        const rates = typeof app.ytPlayer.getAvailablePlaybackRates === 'function' ? app.ytPlayer.getAvailablePlaybackRates() : [];
+        const selected = rates && rates.length ? rates.reduce((best, item) => Math.abs(item - wanted) < Math.abs(best - wanted) ? item : best, rates[0]) : wanted;
+        if (typeof app.ytPlayer.setPlaybackRate === 'function') app.ytPlayer.setPlaybackRate(selected);
+        app.capturePlaybackRate = Number(selected) || wanted;
+        log('播放倍速设置为 ' + app.capturePlaybackRate + 'x。', 'success');
+        return;
       }
       const media = $('media-element');
       if (media) {
-        media.playbackRate = rate;
-        app.capturePlaybackRate = rate;
-        log('媒体捕获播放倍速已设置为 ' + rate + 'x。', 'success');
-        return rate;
+        media.playbackRate = wanted;
+        app.capturePlaybackRate = wanted;
+        log('媒体倍速设置为 ' + wanted + 'x。', 'success');
       }
     } catch (error) {
-      log('设置播放倍速失败，继续使用当前倍速：' + error.message, 'warn');
-    }
-    return app.capturePlaybackRate || 1;
-  }
-
-  function currentCaptureTimelineSeconds() {
-    const mediaElapsed = getCurrentMediaPositionSeconds() - app.captureBaseMediaTime;
-    if (Number.isFinite(mediaElapsed) && mediaElapsed > 0) return mediaElapsed;
-    const elapsedWall = Math.max(0, (Date.now() - app.captureStartedAt) / 1000);
-    return elapsedWall * (app.capturePlaybackRate || 1);
-  }
-
-  function makeCaptureProgressText(elapsedWall, mediaElapsed, target, bytes) {
-    if (target > 0) {
-      return '正在捕获音频：已覆盖视频 ' + mediaElapsed.toFixed(1) + ' / ' + target.toFixed(1) + ' 秒，实际耗时 ' + elapsedWall.toFixed(1) + ' 秒，已缓存 ' + formatBytes(bytes) + '。';
-    }
-    return '正在捕获音频：实际 ' + elapsedWall.toFixed(1) + ' 秒，约覆盖视频 ' + mediaElapsed.toFixed(1) + ' 秒，已缓存 ' + formatBytes(bytes) + '。';
-  }
-
-  function getRemainingMediaSeconds() {
-    try {
-      if (app.currentKind === 'youtube' && app.ytPlayer && typeof app.ytPlayer.getDuration === 'function') {
-        const duration = Number(app.ytPlayer.getDuration());
-        const current = typeof app.ytPlayer.getCurrentTime === 'function' ? Number(app.ytPlayer.getCurrentTime()) : 0;
-        if (Number.isFinite(duration) && duration > 0) return Math.max(0, duration - (Number.isFinite(current) ? current : 0));
-      }
-      const media = $('media-element');
-      if (media && Number.isFinite(media.duration) && media.duration > 0) {
-        return Math.max(0, media.duration - (Number.isFinite(media.currentTime) ? media.currentTime : 0));
-      }
-    } catch (_) {}
-    return 0;
-  }
-
-  async function inspect(autoCapture = false) {
-    const input = ($('source-url')?.value || '').trim();
-    if (!input) {
-      alert('请输入 YouTube 链接、视频直链或音频直链。');
-      return;
-    }
-    if (app.recorder && app.recorder.state !== 'inactive') {
-      alert('正在捕获音频，请先停止。');
-      return;
-    }
-    clearLog();
-    stopDisplayCaptureTracks();
-    resetChecks();
-    resetProgress();
-    resetOutputs();
-    setButton('capture-start-btn', false);
-    setButton('capture-tab-btn', false);
-    setButton('capture-stop-btn', false);
-    setProgress('overall', 3, '链接检测', '开始检测链接。');
-    log('开始检测：' + input);
-
-    const info = classifyUrl(input);
-    setStatus('check-type', info.label, info.kind === 'invalid' ? 'bad' : info.kind === 'page' ? 'warn' : 'ok');
-    log('链接类型：' + info.label + '。');
-
-    const probe = await probeHttp(input, info.kind);
-    setStatus('check-connect', probe.ok ? '可连接' : (info.kind === 'page' ? '不是媒体' : '需播放验证'), probe.state);
-    log(probe.message, probe.ok ? 'success' : probe.state === 'bad' ? 'error' : 'warn');
-
-    try {
-      if (info.kind === 'invalid') throw new Error('URL 格式无效。');
-      if (info.kind === 'page') {
-        setStatus('check-control', '不可操作', 'warn');
-        setStatus('check-play', '不可播放', 'warn');
-        setStatus('check-capture', '不可捕获', 'warn');
-        setProgress('overall', 100, '检测结束', '普通网页不能直接作为媒体源。');
-        log('普通网页不是 <video>/<audio> 可直接播放的媒体源；请粘贴真实视频/音频直链。', 'warn');
-        return;
-      }
-      if (info.kind === 'youtube') {
-        await inspectYouTube(input, info.youtubeId);
-        app.oneClickAwaitingTabCapture = true;
-        updateOneClickButton();
-        return;
-      }
-      const canCapture = await loadNativeMedia(input, info.kind);
-      setButton('capture-start-btn', canCapture);
-      if (canCapture && autoCapture) {
-        await startCapture();
-      }
-      updateOneClickButton();
-    } catch (error) {
-      setStatus('check-control', '失败', 'bad');
-      setStatus('check-play', '失败', 'bad');
-      setStatus('check-capture', '失败', 'bad');
-      setProgress('overall', 100, '检测失败', error.message);
-      log('检测失败：' + error.message, 'error');
+      log('设置倍速失败，继续使用当前倍速：' + error.message, 'warn');
     }
   }
 
-  function startCaptureTimer(targetSeconds, hardLimitSeconds) {
-    app.captureTargetSeconds = Number(targetSeconds) || 0;
-    app.captureHardLimitSeconds = Number(hardLimitSeconds) || 0;
-    app.captureTimer = setInterval(() => {
-      const elapsed = (Date.now() - app.captureStartedAt) / 1000;
-      const bytes = app.chunks.reduce((sum, chunk) => sum + chunk.size, 0);
-      const mediaElapsed = currentCaptureTimelineSeconds();
-      const target = app.captureTargetSeconds > 0 ? app.captureTargetSeconds : 0;
-      const pct = target > 0 ? Math.min(100, (mediaElapsed / target) * 100) : Math.min(95, 8 + mediaElapsed / 18);
-      setProgress('audio', pct, app.captureMode || '音频提取', makeCaptureProgressText(elapsed, mediaElapsed, target, bytes));
-      setProgress('overall', Math.min(72, 58 + pct * 0.14), '音频提取', '音频捕获进行中。');
-    }, 500);
-  }
-
-  function recorderStopHandler(mime) {
-    return async () => {
-      clearInterval(app.captureTimer);
-      clearTimeout(app.stopTimer);
-      app.captureTimer = null;
-      app.stopTimer = null;
-      const type = mime || 'audio/webm';
-      app.capturedBlob = new Blob(app.chunks, { type });
-      app.capturedUrl = URL.createObjectURL(app.capturedBlob);
-      app.capturedSeconds = Math.max(0.1, (Date.now() - app.captureStartedAt) / 1000);
-      app.captureTargetSeconds = 0;
-      app.captureHardLimitSeconds = 0;
-      stopDisplayCaptureTracks();
-      setButton('capture-start-btn', app.currentKind !== 'youtube' && app.mediaReadyForCapture);
-      setButton('capture-tab-btn', app.currentKind === 'youtube');
-      setButton('capture-stop-btn', false);
-      setButton('download-audio-btn', app.capturedBlob.size > 0);
-      setButton('transcribe-btn', app.capturedBlob.size > 0);
-      setProgress('audio', 100, '音频提取', '音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒。');
-      setProgress('overall', 72, '音频完成', '开始转文字。');
-      log('音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒。', 'success');
-      if (app.capturedBlob.size > 0) await transcribe();
-    };
-  }
-
-  function enqueueSegment(segment) {
-    if (!segment || !segment.blob || segment.blob.size <= 0) return;
-    app.segmentQueue.push(segment);
-    app.capturedSegmentCount += 1;
-    const target = app.captureTargetSeconds > 0 ? app.captureTargetSeconds : 0;
-    const pct = target > 0 ? Math.min(96, (segment.end / target) * 100) : Math.min(96, 8 + segment.end / 18);
-    setProgress('audio', pct, app.captureMode || '音频提取', '已切出第 ' + segment.index + ' 段：累计覆盖到 ' + segment.end.toFixed(1) + ' 秒，正在持续追加文字。');
-    log('音频第 ' + segment.index + ' 段进入转写队列：' + formatBytes(segment.blob.size) + '，覆盖 ' + segment.start.toFixed(1) + '-' + segment.end.toFixed(1) + ' 秒。', 'success');
-    processSegmentQueue();
-  }
-
-  function mergeFloat32Chunks(chunks, totalSamples) {
-    const merged = new Float32Array(totalSamples);
-    let offset = 0;
-    for (const chunk of chunks) {
-      merged.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return merged;
-  }
-
-  function encodeWav(samples, sampleRate) {
-    const buffer = new ArrayBuffer(44 + samples.length * 2);
-    const view = new DataView(buffer);
-    const writeString = (offset, text) => {
-      for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
-    };
-    writeString(0, 'RIFF');
-    view.setUint32(4, 36 + samples.length * 2, true);
-    writeString(8, 'WAVE');
-    writeString(12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * 2, true);
-    view.setUint16(32, 2, true);
-    view.setUint16(34, 16, true);
-    writeString(36, 'data');
-    view.setUint32(40, samples.length * 2, true);
-    let offset = 44;
-    for (let i = 0; i < samples.length; i += 1) {
-      const s = Math.max(-1, Math.min(1, samples[i]));
-      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-      offset += 2;
-    }
-    return new Blob([view], { type: 'audio/wav' });
-  }
-
-  function resampleLinear(input, inputRate, outputRate) {
-    if (!input || !input.length) return new Float32Array(0);
-    if (!inputRate || !outputRate || Math.abs(inputRate - outputRate) < 1) return input;
-    const ratio = inputRate / outputRate;
-    const outLength = Math.max(1, Math.floor(input.length / ratio));
-    const output = new Float32Array(outLength);
-    for (let i = 0; i < outLength; i += 1) {
-      const src = i * ratio;
-      const left = Math.floor(src);
-      const right = Math.min(input.length - 1, left + 1);
-      const t = src - left;
-      output[i] = input[left] * (1 - t) + input[right] * t;
-    }
-    return output;
-  }
-
-  function audioBufferToMono(buffer) {
-    const length = buffer.length || 0;
-    const channels = buffer.numberOfChannels || 1;
-    const mono = new Float32Array(length);
-    for (let ch = 0; ch < channels; ch += 1) {
-      const data = buffer.getChannelData(ch);
-      for (let i = 0; i < length; i += 1) mono[i] += data[i] / channels;
-    }
-    return mono;
-  }
-
-  async function decodeCapturedBlobToSegments(sessionId) {
-    if (sessionId !== app.segmentSessionId || !app.capturedBlob || app.capturedBlob.size <= 0) return;
-    const settings = currentSettings();
-    const expected = Math.max(1, Math.floor((app.capturedSeconds || 0) / Math.max(5, settings.segmentSeconds || 10)));
-    if (app.capturedSegmentCount >= Math.max(2, Math.floor(expected * 0.8))) return;
-
-    app.recoveringSegments = true;
-    try {
-      setProgress('asr', Math.max(12, Number(($('asr-percent')?.textContent || '0').replace('%', '')) || 12), '补全音频分段', '实时分段不足，正在从完整音频重新切分，确保不是只转第一句。');
-      log('检测到实时分段不足：已有 ' + app.capturedSegmentCount + ' 段，预计约 ' + expected + ' 段；开始从完整音频补充分段。', 'warn');
-      const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-      if (!AudioContextCtor) throw new Error('当前浏览器不支持 AudioContext，无法补全分段。');
-      const context = new AudioContextCtor();
-      const arrayBuffer = await app.capturedBlob.arrayBuffer();
-      const decoded = await context.decodeAudioData(arrayBuffer.slice(0));
-      const mono = audioBufferToMono(decoded);
-      const sampleRate = 16000;
-      const pcm = resampleLinear(mono, decoded.sampleRate || sampleRate, sampleRate);
-      try { await context.close(); } catch (_) {}
-
-      const segmentSamples = Math.max(sampleRate * 5, Math.floor((settings.segmentSeconds || 10) * sampleRate));
-      const already = app.capturedSegmentCount;
-      let index = 0;
-      for (let offset = 0; offset < pcm.length; offset += segmentSamples) {
-        index += 1;
-        if (index <= already) continue;
-        const end = Math.min(pcm.length, offset + segmentSamples);
-        const samples = pcm.slice(offset, end);
-        if (samples.length < sampleRate * 0.5) continue;
-        const audioStart = offset / sampleRate;
-        const audioEnd = end / sampleRate;
-        enqueueSegment({
-          index,
-          start: audioStart * (app.capturePlaybackRate || 1),
-          end: audioEnd * (app.capturePlaybackRate || 1),
-          duration: audioEnd - audioStart,
-          blob: encodeWav(samples, sampleRate)
-        });
-      }
-      log('完整音频补充分段完成：当前累计 ' + app.capturedSegmentCount + ' 段。', 'success');
-    } catch (error) {
-      log('完整音频补充分段失败：' + error.message + '。仍继续处理已获得的分段。', 'error');
-    } finally {
-      app.recoveringSegments = false;
-      processSegmentQueue();
-      finishSegmentTranscriptionIfDone();
-    }
-  }
-
-  function clearPcmBuffer() {
-    app.pcmBuffer = [];
-    app.pcmBufferedSamples = 0;
-  }
-
-  function cutPcmSegment(sampleCount) {
-    let remaining = sampleCount;
-    const out = [];
-    let outSamples = 0;
-    while (remaining > 0 && app.pcmBuffer.length) {
-      const first = app.pcmBuffer[0];
-      if (first.length <= remaining) {
-        out.push(first);
-        outSamples += first.length;
-        remaining -= first.length;
-        app.pcmBuffer.shift();
-      } else {
-        out.push(first.slice(0, remaining));
-        outSamples += remaining;
-        app.pcmBuffer[0] = first.slice(remaining);
-        remaining = 0;
-      }
-    }
-    app.pcmBufferedSamples = Math.max(0, app.pcmBufferedSamples - outSamples);
-    return mergeFloat32Chunks(out, outSamples);
-  }
-
-  function flushPcmSegment(force = false) {
-    if (!app.pcmBufferedSamples) return;
-    const settings = currentSettings();
-    const sampleRate = app.pcmSampleRate || 16000;
-    const segmentSamples = Math.max(1, Math.floor((settings.segmentSeconds || 10) * sampleRate));
-    while (app.pcmBufferedSamples >= segmentSamples || (force && app.pcmBufferedSamples > sampleRate * 0.5)) {
-      const wanted = app.pcmBufferedSamples >= segmentSamples ? segmentSamples : app.pcmBufferedSamples;
-      const samples = cutPcmSegment(wanted);
-      if (!samples.length) break;
-      const audioSeconds = samples.length / sampleRate;
-      const videoSeconds = audioSeconds * (app.capturePlaybackRate || 1);
-      const start = app.pcmSegmentVideoStart;
-      const end = start + videoSeconds;
-      app.pcmSegmentVideoStart = end;
-      const index = app.segmentIndex + 1;
-      app.segmentIndex = index;
-      enqueueSegment({
-        index,
-        start,
-        end,
-        duration: audioSeconds,
-        blob: encodeWav(samples, sampleRate)
-      });
-    }
-  }
-
-  async function startPcmSegmenter(audioStream) {
-    stopPcmSegmenter(false);
-    clearPcmBuffer();
-    app.pcmSegmentVideoStart = Math.max(0, currentCaptureTimelineSeconds());
-    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContextCtor) throw new Error('当前浏览器不支持 Web Audio，无法分段转写。');
-    const context = new AudioContextCtor({ sampleRate: 16000 });
-    if (context.state === 'suspended') {
-      try { await context.resume(); } catch (_) {}
-    }
-    app.pcmContext = context;
-    app.pcmSampleRate = context.sampleRate || 16000;
-    app.pcmSource = context.createMediaStreamSource(audioStream);
-    app.pcmProcessor = context.createScriptProcessor(4096, 1, 1);
-    app.pcmGain = context.createGain();
-    app.pcmGain.gain.value = 0;
-    app.pcmProcessor.onaudioprocess = (event) => {
-      if (app.segmentStopRequested) return;
-      const input = event.inputBuffer;
-      const channels = input.numberOfChannels || 1;
-      const length = input.length || 0;
-      const mono = new Float32Array(length);
-      for (let ch = 0; ch < channels; ch += 1) {
-        const data = input.getChannelData(ch);
-        for (let i = 0; i < length; i += 1) mono[i] += data[i] / channels;
-      }
-      app.pcmBuffer.push(mono);
-      app.pcmBufferedSamples += mono.length;
-      flushPcmSegment(false);
-    };
-    app.pcmSource.connect(app.pcmProcessor);
-    app.pcmProcessor.connect(app.pcmGain);
-    app.pcmGain.connect(context.destination);
-    log('已启用 Web Audio PCM 分段：每段输出独立 WAV，避免长音频只转第一句。', 'success');
-  }
-
-  function stopPcmSegmenter(flush = true) {
-    if (flush) {
-      try { flushPcmSegment(true); } catch (_) {}
-    }
-    if (app.pcmProcessor) {
-      try { app.pcmProcessor.disconnect(); } catch (_) {}
-      app.pcmProcessor.onaudioprocess = null;
-    }
-    if (app.pcmSource) {
-      try { app.pcmSource.disconnect(); } catch (_) {}
-    }
-    if (app.pcmGain) {
-      try { app.pcmGain.disconnect(); } catch (_) {}
-    }
-    if (app.pcmContext) {
-      try { app.pcmContext.close(); } catch (_) {}
-    }
-    app.pcmProcessor = null;
-    app.pcmSource = null;
-    app.pcmGain = null;
-    app.pcmContext = null;
-    clearPcmBuffer();
-  }
-
-  function startSegmentRecorder(sessionId) {
-    if (sessionId !== app.segmentSessionId || !app.segmentCaptureStream) return;
-    const recorder = new MediaRecorder(app.segmentCaptureStream, { mimeType: app.segmentMime, audioBitsPerSecond: 24000 });
-    app.segmentRecorder = recorder;
-    app.recorder = recorder;
-    recorder.ondataavailable = (event) => {
-      if (event.data && event.data.size > 0) {
-        app.audioParts.push(event.data);
-        app.chunks.push(event.data);
-      }
-    };
-    recorder.onerror = (event) => {
-      log('MediaRecorder 错误：' + (event.error ? event.error.message : '未知错误'), 'error');
-    };
-    recorder.onstop = () => {
-      if (sessionId !== app.segmentSessionId) return;
-      finalizeSegmentCapture(sessionId);
-    };
-    recorder.start(1000);
-  }
-
-  function finalizeSegmentCapture(sessionId) {
-    if (sessionId !== app.segmentSessionId) return;
-    app.segmentStopRequested = true;
-    clearInterval(app.captureTimer);
-    clearTimeout(app.stopTimer);
-    clearTimeout(app.segmentTimer);
-    app.captureTimer = null;
-    app.stopTimer = null;
-    app.segmentTimer = null;
-    stopPcmSegmenter(true);
-    const type = app.segmentMime || 'audio/webm';
-    app.capturedBlob = new Blob(app.audioParts, { type });
-    if (app.capturedUrl) URL.revokeObjectURL(app.capturedUrl);
-    app.capturedUrl = app.capturedBlob.size ? URL.createObjectURL(app.capturedBlob) : '';
-    app.capturedSeconds = Math.max(0.1, (Date.now() - app.captureStartedAt) / 1000);
-    app.captureTargetSeconds = 0;
-    app.captureHardLimitSeconds = 0;
-    app.segmentRecorder = null;
-    app.recorder = null;
-    stopDisplayCaptureTracks();
-    setButton('capture-start-btn', app.currentKind !== 'youtube' && app.mediaReadyForCapture);
-    setButton('capture-tab-btn', app.currentKind === 'youtube');
-    setButton('capture-stop-btn', false);
-    setButton('download-audio-btn', app.capturedBlob.size > 0);
-    setButton('transcribe-btn', app.capturedBlob.size > 0 || app.segmentQueue.length > 0);
-    setButton('download-txt-btn', Boolean(app.transcriptText));
-    updateOneClickButton();
-    setProgress('audio', 100, '音频提取', '音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒，已切出 ' + app.capturedSegmentCount + ' 段。');
-    log('音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒，已切出 ' + app.capturedSegmentCount + ' 段；剩余分段会继续转写并追加到纯文本结果。', 'success');
-    decodeCapturedBlobToSegments(sessionId);
-    processSegmentQueue();
-    finishSegmentTranscriptionIfDone();
-  }
-
-  async function startRecorderFromAudioStream(audioStream, mime, seconds, modeLabel, expectedSeconds = 0) {
-    if (!audioStream || !audioStream.getAudioTracks().length) throw new Error('没有可录制的音轨。');
-    resetOutputs();
-    const sessionId = app.segmentSessionId;
-    setProgress('asr', 0, 'ASR 分段识别', '边捕获边转文字：不再等完整 40 分钟音频录完才开始识别。');
-    app.chunks = [];
-    app.audioParts = [];
-    app.capturedBlob = null;
-    app.captureStartedAt = Date.now();
-    app.captureBaseMediaTime = getCurrentMediaPositionSeconds();
-    app.capturePlaybackRate = applyCapturePlaybackRate();
-    app.captureMode = modeLabel;
-    app.segmentCaptureStream = audioStream;
-    app.segmentMime = mime || 'audio/webm';
-    app.segmentStopRequested = false;
-    app.oneClickAwaitingTabCapture = false;
-    const hardLimitSeconds = Number(seconds) || 0;
-    const targetSeconds = hardLimitSeconds > 0 ? hardLimitSeconds * (app.capturePlaybackRate || 1) : (Number(expectedSeconds) || 0);
-    app.captureHardLimitSeconds = hardLimitSeconds;
-    app.captureTargetSeconds = targetSeconds;
-
-    audioStream.getAudioTracks().forEach((track) => {
-      track.onended = () => {
-        log('音频轨道已结束。', 'warn');
-        stopCapture();
-      };
-    });
-
-    setButton('capture-start-btn', false);
-    setButton('capture-tab-btn', false);
-    setButton('capture-stop-btn', true);
-    const settings = currentSettings();
-    const limitText = hardLimitSeconds > 0
-      ? '0.0 / 约 ' + (hardLimitSeconds * (app.capturePlaybackRate || 1)).toFixed(1) + ' 秒视频'
-      : (targetSeconds > 0 ? '0.0 / 全长约 ' + targetSeconds.toFixed(1) + ' 秒视频' : '0.0 秒视频 / 全长或手动停止');
-    setProgress('audio', 0, '音频提取', '正在捕获音频：' + limitText + '。分段长度：' + settings.segmentSeconds + ' 秒，播放倍速：' + app.capturePlaybackRate + 'x。');
-    setProgress('asr', 0, 'ASR 分段识别', '模型预热后会边录边识别，每完成一段就追加到结果。');
-    log('开始' + modeLabel + '，' + (hardLimitSeconds > 0 ? '最长 ' + hardLimitSeconds + ' 秒' : '不按秒数截断，直到视频结束或手动停止') + '，录制格式：' + app.segmentMime + '，分段 ' + settings.segmentSeconds + ' 秒，播放倍速 ' + app.capturePlaybackRate + 'x。');
-    scheduleWarmup(50);
-    await startPcmSegmenter(audioStream);
-    startCaptureTimer(targetSeconds, hardLimitSeconds);
-    if (hardLimitSeconds > 0) app.stopTimer = setTimeout(() => stopCapture(), hardLimitSeconds * 1000);
-    startSegmentRecorder(sessionId);
-    updateOneClickButton();
-  }
-
-  async function startCapture() {
+  async function startMediaPlaybackForCapture() {
+    applyPlaybackRate();
     if (app.currentKind === 'youtube') {
-      log('YouTube 需要使用“捕获当前标签页音频”按钮；媒体元素 captureStream 不能读取 iframe 内部音频。', 'warn');
-      alert('YouTube 请点击“捕获当前标签页音频”，并在浏览器弹窗中选择当前标签页、勾选共享音频。');
+      if (app.ytPlayer && typeof app.ytPlayer.playVideo === 'function') {
+        app.ytPlayer.playVideo();
+        log('已请求 YouTube 开始播放，用于捕获标签页音频。');
+      }
       return;
     }
     const media = $('media-element');
-    if (!media || !app.currentUrl) {
-      alert('请先检测并加载媒体链接。');
-      return;
+    if (!media) return;
+    media.muted = false;
+    try {
+      await media.play();
+      log('媒体开始播放，用于捕获音频。', 'success');
+    } catch (error) {
+      throw new Error('浏览器阻止媒体播放：' + error.message + '。请用独立播放页确认链接可播放，或降低浏览器自动播放限制。');
     }
-    if (!window.MediaRecorder) {
-      alert('当前浏览器不支持 MediaRecorder。');
-      return;
+  }
+
+  function mediaCoverageSeconds() {
+    const t = getMediaTime();
+    return Math.max(0, t - app.captureBaseMediaTime);
+  }
+
+  function totalCachedBytes() {
+    return app.completedAudioBytes + app.currentChunks.reduce((sum, blob) => sum + blob.size, 0);
+  }
+
+  function updateCaptureProgress() {
+    if (!app.captureActive) return;
+    const coverage = mediaCoverageSeconds();
+    const elapsed = (Date.now() - app.captureStartWall) / 1000;
+    const target = app.captureTargetSeconds || 0;
+    const pct = target > 0 ? Math.min(99, (coverage / target) * 100) : Math.min(98, 8 + coverage / 36);
+    const pausedText = app.capturePaused ? '，视频暂停中：录制器已暂停，不再缓存静音' : '';
+    const targetText = target > 0 ? ' / ' + target.toFixed(1) + ' 秒' : ' 秒 / 全长或手动停止';
+    setProgress('audio', pct, '音频提取', '正在捕获音频：已覆盖视频 ' + coverage.toFixed(1) + targetText + '，实际耗时 ' + elapsed.toFixed(1) + ' 秒，已缓存 ' + formatBytes(totalCachedBytes()) + pausedText + '。');
+    setProgress('overall', Math.min(76, 38 + pct * 0.38), '捕获与转写', app.capturePaused ? '视频暂停，音频捕获暂停。' : '正在边捕获边转文字。');
+  }
+
+  function enqueueSegment(blob, start, end) {
+    if (!blob || blob.size <= 0) return;
+    const index = app.currentSegmentIndex;
+    app.capturedSegmentCount += 1;
+    app.completedAudioBytes += blob.size;
+    app.segmentQueue.push({ index, start, end, duration: Math.max(0.1, end - start), blob });
+    log('音频分段入队：第 ' + index + ' 段，覆盖 ' + start.toFixed(1) + '-' + end.toFixed(1) + ' 秒，大小 ' + formatBytes(blob.size) + '。');
+    processSegmentQueue();
+  }
+
+  function beginRecorderSegment() {
+    if (!app.captureStream || app.captureStopping) return;
+    const mime = app.recorderMime || pickAudioMime();
+    if (!mime) throw new Error('没有可用 MediaRecorder 音频编码。');
+    app.currentChunks = [];
+    app.currentSegmentIndex += 1;
+    app.currentSegmentStartMedia = mediaCoverageSeconds();
+    app.currentSegmentActiveMs = 0;
+    app.currentSegmentLastTick = performance.now();
+    const recorder = new MediaRecorder(app.captureStream, { mimeType: mime, audioBitsPerSecond: 24000 });
+    app.recorder = recorder;
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) app.currentChunks.push(event.data);
+    };
+    recorder.onerror = (event) => log('MediaRecorder 错误：' + (event.error ? event.error.message : '未知错误'), 'error');
+    recorder.onstop = () => {
+      const blob = new Blob(app.currentChunks, { type: mime });
+      const start = app.currentSegmentStartMedia;
+      const end = Math.max(start + 0.1, mediaCoverageSeconds());
+      const shouldKeep = blob.size > 0 && end - start > 0.2;
+      if (shouldKeep) enqueueSegment(blob, start, end);
+      app.currentChunks = [];
+      app.recorder = null;
+      if (app.captureActive && !app.captureStopping && !app.capturePaused) {
+        try { beginRecorderSegment(); } catch (error) { log('启动下一段录制失败：' + error.message, 'error'); stopCapture(); }
+      } else if (app.captureStopping) {
+        finishCapture();
+      }
+    };
+    recorder.start();
+  }
+
+  function pauseRecorderBecauseMediaPaused() {
+    if (app.capturePaused) return;
+    app.capturePaused = true;
+    if (app.recorder && app.recorder.state === 'recording') {
+      try { app.recorder.pause(); } catch (_) {}
     }
-    if (media.paused) {
-      try { await media.play(); } catch (_) { alert('请先手动播放媒体后再捕获。'); return; }
+    setStatus('check-capture', '视频暂停，录制已暂停', 'warn');
+    log('检测到视频暂停或播放时间不前进：已暂停录制器，不再缓存静音。', 'warn');
+    updateCaptureProgress();
+  }
+
+  function resumeRecorderBecauseMediaPlaying() {
+    if (!app.capturePaused) return;
+    app.capturePaused = false;
+    app.currentSegmentLastTick = performance.now();
+    if (app.recorder && app.recorder.state === 'paused') {
+      try { app.recorder.resume(); } catch (_) {}
+    } else if (!app.recorder && app.captureActive && !app.captureStopping) {
+      beginRecorderSegment();
     }
-    const stream = getCaptureStream(media);
-    if (!stream) { alert('当前浏览器不支持 captureStream()。'); return; }
-    const tracks = stream.getAudioTracks();
-    if (!tracks.length) { alert('没有检测到可捕获音轨。'); return; }
+    setStatus('check-capture', '正在捕获音频', 'ok');
+    log('检测到视频继续播放：已恢复音频捕获。', 'success');
+  }
+
+  function rotateRecorderSegment() {
+    if (!app.recorder || app.recorder.state === 'inactive') return;
+    try { app.recorder.stop(); } catch (error) { log('切分音频段失败：' + error.message, 'error'); }
+  }
+
+  function startPlaybackWatchdog() {
+    const settings = currentSettings();
+    app.lastMediaTime = getMediaTime();
+    app.lastMediaAdvanceAt = performance.now();
+    app.currentSegmentLastTick = performance.now();
+    clearInterval(app.watchdogTimer);
+    app.watchdogTimer = setInterval(() => {
+      if (!app.captureActive) return;
+      const now = performance.now();
+      const t = getMediaTime();
+      const advanced = t > app.lastMediaTime + 0.03;
+      if (advanced) {
+        app.lastMediaTime = t;
+        app.lastMediaAdvanceAt = now;
+      }
+      const stalledMs = now - app.lastMediaAdvanceAt;
+      const paused = isMediaPaused() || stalledMs > 1800;
+      if (paused) {
+        pauseRecorderBecauseMediaPaused();
+      } else {
+        resumeRecorderBecauseMediaPlaying();
+      }
+      if (!app.capturePaused && app.recorder && app.recorder.state === 'recording') {
+        const delta = Math.max(0, now - app.currentSegmentLastTick);
+        app.currentSegmentActiveMs += delta;
+        app.currentSegmentLastTick = now;
+        if (app.currentSegmentActiveMs >= settings.segmentSeconds * 1000) rotateRecorderSegment();
+      } else {
+        app.currentSegmentLastTick = now;
+      }
+      updateCaptureProgress();
+      const duration = getMediaDuration();
+      if (duration > 0 && t >= duration - 0.3) stopCapture();
+      if (app.captureWallLimitSeconds > 0 && (Date.now() - app.captureStartWall) / 1000 >= app.captureWallLimitSeconds) stopCapture();
+    }, 350);
+  }
+
+  async function startAudioCaptureFromStream(stream, label, expectedSeconds = 0) {
+    if (!stream || !stream.getAudioTracks().length) throw new Error('没有可捕获的音轨。');
     const mime = pickAudioMime();
-    if (!mime) { alert('没有可用音频录制编码。'); return; }
+    if (!mime) throw new Error('当前浏览器没有可用音频录制编码。');
+
+    app.asrRunId += 1;
+    app.captureStream = stream;
+    app.recorderMime = mime;
+    app.captureActive = true;
+    app.captureStopping = false;
+    app.capturePaused = false;
+    app.currentSegmentIndex = 0;
+    app.currentChunks = [];
+    app.allAudioParts = [];
+    app.completedAudioBytes = 0;
+    app.failedSegmentCount = 0;
+    app.segmentQueue = [];
+    app.segmentProcessing = false;
+    app.isTranscribing = false;
+    app.isWarming = false;
+    app.capturedSegmentCount = 0;
+    app.transcribedSegmentCount = 0;
+    app.transcribedMediaSeconds = 0;
+    app.transcriptBySegment = new Map();
+    app.transcriptText = '';
+    app.firstSegmentLanguageDecisionDone = false;
+    if ($('transcript-output')) $('transcript-output').value = '';
 
     const settings = currentSettings();
-    const expectedSeconds = settings.unlimitedCapture ? getRemainingMediaSeconds() : settings.seconds;
-    media.addEventListener('ended', () => {
-      if (app.recorder && app.recorder.state !== 'inactive') {
-        log('媒体播放已结束，自动停止音频捕获。', 'success');
-        stopCapture();
-      }
-    }, { once: true });
-    await startRecorderFromAudioStream(new MediaStream(tracks), mime, settings.seconds, '媒体音频捕获', expectedSeconds);
+    app.captureStartWall = Date.now();
+    app.captureBaseMediaTime = getMediaTime();
+    app.captureTargetSeconds = settings.seconds > 0 ? settings.seconds * app.capturePlaybackRate : expectedSeconds;
+    app.captureWallLimitSeconds = settings.seconds > 0 ? settings.seconds : 0;
+    app.lastMediaTime = getMediaTime();
+    app.lastMediaAdvanceAt = performance.now();
+
+    stream.getTracks().forEach((track) => {
+      track.onended = () => {
+        if (app.captureActive) {
+          log('捕获轨道已结束。', 'warn');
+          stopCapture();
+        }
+      };
+    });
+
+    setStatus('check-capture', '正在捕获音频', 'ok');
+    setProgress('audio', 2, '音频提取', label + '已开始。');
+    setProgress('asr', 0, '转文字', '模型会并行预热；每完成一个独立音频段就立即追加文本。');
+    log('开始' + label + '：独立分段录制，视频暂停时录制器会暂停，避免缓存静音。录制格式：' + mime + '。', 'success');
+    updateOneClickButton();
+    scheduleWarmup(50);
+    beginRecorderSegment();
+    startPlaybackWatchdog();
+    updateCaptureProgress();
+  }
+
+  async function startNativeCapture() {
+    const media = $('media-element');
+    if (!media || !app.mediaReady) throw new Error('媒体尚未准备好。');
+    await startMediaPlaybackForCapture();
+    const rawStream = getCaptureStream(media);
+    if (!rawStream || !rawStream.getAudioTracks().length) throw new Error('没有检测到媒体音轨。');
+    const stream = new MediaStream(rawStream.getAudioTracks());
+    const expected = currentSettings().seconds > 0 ? currentSettings().seconds : Math.max(0, getMediaDuration() - getMediaTime());
+    await startAudioCaptureFromStream(stream, '媒体音频捕获', expected);
   }
 
   async function startTabCapture() {
-    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') {
-      alert('当前浏览器不支持 getDisplayMedia。请用 Chrome 桌面端测试。');
-      log('当前浏览器不支持 getDisplayMedia，不能捕获当前标签页音频。', 'error');
-      return;
-    }
-    if (!window.MediaRecorder) {
-      alert('当前浏览器不支持 MediaRecorder。');
-      return;
-    }
-    const settings = currentSettings();
-    const mime = pickAudioMime();
-    if (!mime) { alert('没有可用音频录制编码。'); return; }
-    stopDisplayCaptureTracks();
-    scheduleWarmup(50);
-
-    log('即将请求浏览器授权：请选择“当前标签页/This Tab”，并勾选“共享标签页音频/Share tab audio”。', 'warn');
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') throw new Error('当前浏览器不支持标签页音频捕获，请使用 Chrome 桌面版。');
     setStatus('check-capture', '等待浏览器授权', 'pending');
-    setProgress('audio', 2, '标签页音频捕获', '等待用户在浏览器弹窗中选择当前标签页并共享音频。');
+    setProgress('audio', 2, '标签页音频捕获', '请选择当前标签页，并勾选共享标签页音频。');
+    log('请求浏览器授权：请选择当前标签页，并勾选“共享标签页音频”。', 'warn');
+    let stream;
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
+      stream = await navigator.mediaDevices.getDisplayMedia({
         video: true,
         audio: true,
         preferCurrentTab: true,
@@ -1163,66 +1050,65 @@
         surfaceSwitching: 'exclude'
       });
       app.displayStream = stream;
-      const videoTrack = stream.getVideoTracks()[0];
-      if (videoTrack && videoTrack.getSettings) {
-        const settings = videoTrack.getSettings();
-        if (settings.displaySurface && settings.displaySurface !== 'browser') {
-          log('当前捕获的不是浏览器标签页，而是：' + settings.displaySurface + '。仍会尝试读取其中音频。', 'warn');
-        } else {
-          log('已获得浏览器标签页捕获流。', 'success');
-        }
-      }
       const audioTracks = stream.getAudioTracks();
       if (!audioTracks.length) {
         stopDisplayCaptureTracks();
-        setStatus('check-capture', '未共享音频', 'bad');
-        setProgress('audio', 0, '标签页音频捕获', '没有拿到音频轨。请重新点击并勾选共享标签页音频。');
-        log('授权完成，但没有音频轨。通常是没有勾选“共享标签页音频”。', 'error');
-        alert('没有捕获到音频轨。请重新点击，并在弹窗里勾选“共享标签页音频”。');
-        return;
+        throw new Error('没有捕获到音频轨。请重新点击，并勾选“共享标签页音频”。');
       }
-
-      if (app.ytPlayer && typeof app.ytPlayer.playVideo === 'function') {
-        try {
-          app.ytPlayer.playVideo();
-          log('已请求 YouTube 播放器开始播放。');
-        } catch (error) {
-          log('YouTube playVideo 调用失败：' + error.message, 'warn');
-        }
+      const videoTrack = stream.getVideoTracks()[0];
+      const settings = videoTrack && typeof videoTrack.getSettings === 'function' ? videoTrack.getSettings() : {};
+      if (settings && settings.displaySurface && settings.displaySurface !== 'browser') {
+        log('当前捕获的可能不是浏览器标签页：' + settings.displaySurface + '。如需准确进度，请选择当前标签页。', 'warn');
       }
-      setStatus('check-capture', '正在捕获标签页音频', 'ok');
-      setProgress('audio', 4, '标签页音频捕获', '已获得音频轨，开始录制当前标签页声音。');
-      const expectedSeconds = settings.unlimitedCapture ? getRemainingMediaSeconds() : settings.seconds;
-      await startRecorderFromAudioStream(new MediaStream(audioTracks), mime, settings.seconds, '当前标签页音频捕获', expectedSeconds);
+      await startMediaPlaybackForCapture();
+      const expected = currentSettings().seconds > 0 ? currentSettings().seconds : Math.max(0, getMediaDuration() - getMediaTime());
+      await startAudioCaptureFromStream(new MediaStream(audioTracks), '当前标签页音频捕获', expected);
     } catch (error) {
-      stopDisplayCaptureTracks();
-      setStatus('check-capture', '授权失败', 'bad');
-      setProgress('audio', 0, '标签页音频捕获失败', error.message);
-      log('标签页音频捕获失败：' + error.message, 'error');
-      alert('标签页音频捕获失败：' + error.message);
+      if (!app.captureActive) stopDisplayCaptureTracks();
+      throw error;
     }
   }
 
   function stopCapture() {
-    app.segmentStopRequested = true;
-    if (!app.recorder || app.recorder.state === 'inactive') {
-      finalizeSegmentCapture(app.segmentSessionId);
-      return;
+    if (!app.captureActive || app.captureStopping) return;
+    app.captureStopping = true;
+    setProgress('audio', 98, '音频提取', '正在停止捕获并封装最后一段音频。');
+    log('停止捕获，正在封装最后一段。');
+    clearInterval(app.watchdogTimer);
+    clearInterval(app.captureTimer);
+    clearTimeout(app.hardStopTimer);
+    app.watchdogTimer = null;
+    app.captureTimer = null;
+    app.hardStopTimer = null;
+    if (app.recorder && app.recorder.state !== 'inactive') {
+      try {
+        if (app.recorder.state === 'paused') app.recorder.resume();
+        app.recorder.stop();
+      } catch (_) {
+        finishCapture();
+      }
+    } else {
+      finishCapture();
     }
-    setProgress('audio', 98, '音频提取', '正在封装当前分段并停止捕获。');
-    log('停止捕获，正在封装当前分段。');
-    try { app.recorder.stop(); } catch (_) { finalizeSegmentCapture(app.segmentSessionId); }
   }
 
-  function languageOptions(language) {
-    if (language === 'zh') return { language: 'chinese', task: 'transcribe' };
-    if (language === 'en') return { language: 'english', task: 'transcribe' };
-    return { task: 'transcribe' };
-  }
-
-  function candidateModelNames() {
-    const settings = currentSettings();
-    return MODEL_MAP[settings.model + ':' + settings.language] || MODEL_MAP['tiny:auto'];
+  function finishCapture() {
+    if (!app.captureActive && !app.captureStopping) return;
+    app.captureActive = false;
+    app.captureStopping = false;
+    stopTimers();
+    stopDisplayCaptureTracks();
+    stopCaptureStreamTracks();
+    pauseSourcePlayback();
+    app.capturedBlob = null;
+    if (app.capturedUrl) URL.revokeObjectURL(app.capturedUrl);
+    app.capturedUrl = '';
+    setButton('download-audio-btn', false);
+    setProgress('audio', 100, '音频提取', '音频捕获完成：已处理 ' + formatBytes(app.completedAudioBytes) + '，共切出 ' + app.capturedSegmentCount + ' 段。剩余队列会继续转文字。');
+    log('音频捕获完成：已处理 ' + formatBytes(app.completedAudioBytes) + '，共切出 ' + app.capturedSegmentCount + ' 段；已自动暂停源视频。', 'success');
+    updateOneClickButton();
+    processSegmentQueue();
+    finishIfDone();
   }
 
   function configureTransformers(mod) {
@@ -1245,95 +1131,75 @@
     let lastError;
     for (const url of urls) {
       try {
-        if (runId === app.asrRunId) {
-          setProgress('asr', 6, 'ASR 运行库', '正在加载 Transformers.js 运行库。');
-          log('加载识别运行库：' + url);
-        }
+        if (runId === app.asrRunId) setProgress('asr', 4, '运行库加载', '正在加载 Transformers.js。');
         const mod = await import(url);
         configureTransformers(mod);
         window.__subtitleDownloadTransformers = mod;
         return mod;
       } catch (error) {
         lastError = error;
-        log('识别运行库加载失败：' + error.message, 'warn');
+        log('Transformers.js 加载失败：' + error.message, 'warn');
       }
     }
     throw lastError || new Error('无法加载 Transformers.js。');
   }
 
-  async function ensureTranscriber(runId) {
+  function selectedModelKeyForLanguage(languageOverride = '') {
+    const settings = currentSettings();
+    const lang = languageOverride || settings.language || 'auto';
+    if (settings.language === 'auto' && languageOverride === 'zh') return settings.model + ':zh';
+    if (settings.language === 'auto' && languageOverride === 'en') return settings.model + ':en';
+    return settings.model + ':' + lang;
+  }
+
+  function modelCandidates(languageOverride = '') {
+    const key = selectedModelKeyForLanguage(languageOverride);
+    return MODEL_MAP[key] || MODEL_MAP['tiny:auto'];
+  }
+
+  async function ensureTranscriber(runId, languageOverride = '') {
     const mod = await loadTransformers(runId);
-    if (!mod || typeof mod.pipeline !== 'function') throw new Error('Transformers.js 加载异常，未找到 pipeline。');
-
-    const modelCandidates = candidateModelNames();
-    const deviceCandidates = navigator.gpu ? ['webgpu', 'wasm'] : ['wasm'];
+    if (!mod || typeof mod.pipeline !== 'function') throw new Error('Transformers.js pipeline 不可用。');
+    const candidates = modelCandidates(languageOverride);
+    const devices = navigator.gpu ? ['webgpu', 'wasm'] : ['wasm'];
     let lastError;
-
-    for (const device of deviceCandidates) {
-      for (const model of modelCandidates) {
+    for (const device of devices) {
+      for (const model of candidates) {
         const key = model + '@' + device;
         if (app.transcriberCache.has(key)) {
           app.transcriber = app.transcriberCache.get(key);
           app.transcriberKey = key;
-          if (runId === app.asrRunId) {
-            setProgress('asr', 35, 'ASR 模型已预热', '复用内存模型：' + model + ' / ' + device + '。');
-            log('复用内存模型：' + model + '；设备：' + device + '。', 'success');
-          }
           return app.transcriber;
         }
-
-        if (app.transcriberPromises.has(key)) {
-          if (runId === app.asrRunId) {
-            setProgress('asr', 18, 'ASR 模型预热中', '已有同模型加载任务，正在复用，不会重复下载。');
-            log('复用正在进行的模型加载任务：' + key + '。');
-          }
-          const pipe = await app.transcriberPromises.get(key);
+        if (app.transcriberPromises.has(key)) return await app.transcriberPromises.get(key);
+        const promise = (async () => {
+          log('加载模型：' + model + ' / ' + device + '。');
+          const pipe = await mod.pipeline('automatic-speech-recognition', model, {
+            device,
+            dtype: device === 'webgpu' ? 'fp16' : 'q8',
+            progress_callback: (event) => {
+              if (runId !== app.asrRunId || !event) return;
+              if (event.status === 'progress' && Number.isFinite(event.progress)) {
+                const pct = Math.max(6, Math.min(34, Number(event.progress) * 0.28 + 6));
+                setProgress('asr', pct, '模型下载', '正在下载模型文件：' + Math.round(event.progress) + '%。');
+              } else if (event.status === 'ready') {
+                setProgress('asr', 34, '模型已就绪', '模型已进入内存缓存。');
+              }
+            }
+          });
+          app.transcriberCache.set(key, pipe);
           app.transcriber = pipe;
           app.transcriberKey = key;
           return pipe;
-        }
-
-        const loadPromise = (async () => {
-          try {
-            if (runId === app.asrRunId) {
-              setProgress('asr', 10, '模型缓存/预热', '正在加载模型：' + model + '（' + device + '）。首次打开会下载；之后优先走浏览器缓存。');
-              setProgress('overall', 74, 'ASR 模型加载', '准备加载识别模型。');
-              log('加载模型：' + model + '；设备：' + device + '。');
-            }
-            const pipe = await mod.pipeline('automatic-speech-recognition', model, {
-              device,
-              progress_callback: (data) => {
-                if (runId !== app.asrRunId || !data) return;
-                if (data.status === 'progress' && typeof data.progress === 'number') {
-                  const pct = Math.max(0, Math.min(100, data.progress));
-                  const scaled = 10 + pct * 0.25;
-                  setProgress('asr', scaled, '模型缓存/下载', '正在缓存模型文件：' + Math.round(pct) + '%。已缓存后同浏览器不会重复下载。');
-                  setProgress('overall', 74 + pct * 0.08, '模型缓存/下载', '模型文件缓存中。');
-                } else if (data.status === 'ready') {
-                  setProgress('asr', 35, '模型已预热', '模型已加载到内存，并写入浏览器缓存。');
-                  log('模型已预热。', 'success');
-                }
-              }
-            });
-            app.transcriberCache.set(key, pipe);
-            app.transcriber = pipe;
-            app.transcriberKey = key;
-            try { localStorage.setItem('subtitle-download:last-model-key', key); } catch (_) {}
-            if (runId === app.asrRunId) setProgress('asr', 35, '模型已预热', '模型已加载；后续同模型会直接复用。');
-            return pipe;
-          } catch (error) {
-            throw error;
-          } finally {
-            app.transcriberPromises.delete(key);
-          }
         })();
-
-        app.transcriberPromises.set(key, loadPromise);
+        app.transcriberPromises.set(key, promise);
         try {
-          return await loadPromise;
+          return await promise;
         } catch (error) {
           lastError = error;
-          log('模型加载失败，尝试下一个候选：' + model + ' / ' + device + '：' + error.message, 'warn');
+          log('模型加载失败：' + key + '：' + error.message, 'warn');
+        } finally {
+          app.transcriberPromises.delete(key);
         }
       }
     }
@@ -1341,210 +1207,258 @@
   }
 
   async function warmupModel(reason = 'auto') {
-    if (app.isTranscribing || app.isWarmingModel) return;
-    app.isWarmingModel = true;
+    if (app.isWarming || app.isTranscribing || app.captionFastPathUsed) return;
+    app.isWarming = true;
     const runId = app.asrRunId;
     try {
-      setProgress('asr', 2, '模型预热', reason === 'manual' ? '正在手动预热模型缓存。' : '正在后台预热模型缓存，捕获结束后可直接识别。');
-      log((reason === 'manual' ? '手动' : '后台') + '预热 ASR 模型。');
-      await ensureTranscriber(runId);
-      if (runId === app.asrRunId && !app.isTranscribing) {
-        setProgress('asr', 35, '模型已预热', '当前模型已在内存/浏览器缓存中；再次识别不会重复下载。');
-      }
+      setProgress('asr', 2, '模型预热', reason === 'manual' ? '正在手动预热模型。' : '正在后台预热模型。');
+      const settings = currentSettings();
+      let override = '';
+      if (settings.language === 'zh' || (settings.language === 'auto' && app.languageHint === 'zh')) override = 'zh';
+      if (settings.language === 'en') override = 'en';
+      await ensureTranscriber(runId, override);
+      if (runId === app.asrRunId && !app.isTranscribing) setProgress('asr', 34, '模型已预热', '当前模型已缓存；后续分段会直接识别。');
     } catch (error) {
-      if (!app.isTranscribing) {
-        setProgress('asr', 0, '模型预热失败', '稍后识别时会重试：' + error.message);
-      }
+      if (!app.isTranscribing) setProgress('asr', 0, '模型预热失败', error.message);
       log('模型预热失败：' + error.message, 'warn');
     } finally {
-      app.isWarmingModel = false;
+      app.isWarming = false;
     }
   }
 
-  function scheduleWarmup(delay = 900) {
+  function scheduleWarmup(delay = 800) {
     clearTimeout(app.warmupTimer);
     app.warmupTimer = setTimeout(() => warmupModel('auto'), delay);
   }
 
-  function secondsToSrtTime(seconds) {
-    const safe = Math.max(0, Number(seconds) || 0);
-    const h = Math.floor(safe / 3600);
-    const m = Math.floor((safe % 3600) / 60);
-    const s = Math.floor(safe % 60);
-    const ms = Math.floor((safe - Math.floor(safe)) * 1000);
-    return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0') + ',' + String(ms).padStart(3, '0');
-  }
-
-  function normalizeChunks(output) {
-    const chunks = Array.isArray(output && output.chunks) ? output.chunks : [];
-    return chunks.map((chunk, index) => {
-      const ts = chunk.timestamp || chunk.timestamps || [index * 4, index * 4 + 4];
-      let start = Array.isArray(ts) ? ts[0] : ts.start;
-      let end = Array.isArray(ts) ? ts[1] : ts.end;
-      if (!Number.isFinite(start)) start = index * 4;
-      if (!Number.isFinite(end) || end <= start) end = start + 4;
-      return { start, end, text: String(chunk.text || '').trim() };
-    }).filter((chunk) => chunk.text);
-  }
-
-  function chunksToSrt(chunks, fallbackText) {
-    if (!chunks.length && fallbackText) {
-      const end = Math.max(2, app.capturedSeconds || 2);
-      return '1\n' + secondsToSrtTime(0) + ' --> ' + secondsToSrtTime(end) + '\n' + fallbackText.trim() + '\n';
+  function transcribeOptions(languageOverride = '') {
+    const settings = currentSettings();
+    let language = languageOverride;
+    if (!language) {
+      if (settings.language === 'zh') language = 'zh';
+      else if (settings.language === 'en') language = 'en';
+      else if (app.languageHint === 'zh') language = 'zh';
     }
-    return chunks.map((chunk, index) => {
-      return (index + 1) + '\n' + secondsToSrtTime(chunk.start) + ' --> ' + secondsToSrtTime(chunk.end) + '\n' + chunk.text + '\n';
-    }).join('\n');
+    const options = { task: 'transcribe', return_timestamps: false, condition_on_previous_text: false };
+    if (language === 'zh') options.language = 'chinese';
+    if (language === 'en') options.language = 'english';
+    return options;
   }
 
-  function makeTranscribeOptions(settings) {
-    const baseOptions = languageOptions(settings.language);
-    const stabilityOptions = {
-      condition_on_previous_text: false
-    };
-    if (settings.timestampMode === 'accurate') {
-      return Object.assign({
-        return_timestamps: true,
-        chunk_length_s: 15,
-        stride_length_s: 2
-      }, stabilityOptions, baseOptions);
+  function looksEnglish(text) {
+    const value = String(text || '').trim();
+    if (!value) return false;
+    const latin = (value.match(/[A-Za-z]/g) || []).length;
+    const cjk = (value.match(/[\u3400-\u9fff]/g) || []).length;
+    return latin >= 8 && cjk === 0;
+  }
+
+  function looksChinese(text) {
+    return /[\u3400-\u9fff]/.test(String(text || ''));
+  }
+
+  function normalizeAsrText(text) {
+    return String(text || '')
+      .replace(/\s+([,.!?;:])/g, '$1')
+      .replace(/[ \t]{2,}/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  async function runAsrOnBlob(pipe, blob, options) {
+    const url = URL.createObjectURL(blob);
+    try {
+      const result = await pipe(url, options);
+      return normalizeAsrText(result && result.text ? result.text : '');
+    } finally {
+      URL.revokeObjectURL(url);
     }
-    return Object.assign({}, stabilityOptions, baseOptions);
   }
 
-  function renderTranscriptOnly() {
+  async function transcribeSegment(segment, runId) {
+    const settings = currentSettings();
+    let languageOverride = '';
+    if (settings.language === 'zh') languageOverride = 'zh';
+    if (settings.language === 'en') languageOverride = 'en';
+    if (settings.language === 'auto' && app.languageHint === 'zh') languageOverride = 'zh';
+
+    let pipe = await ensureTranscriber(runId, languageOverride);
+    let text = await runAsrOnBlob(pipe, segment.blob, transcribeOptions(languageOverride));
+
+    if (settings.language === 'auto' && !app.firstSegmentLanguageDecisionDone) {
+      app.firstSegmentLanguageDecisionDone = true;
+      if (!app.languageHint && looksEnglish(text)) {
+        log('首段自动识别成英文；开始中文纠错试跑，防止中文视频被误识别成英文。', 'warn');
+        try {
+          const zhPipe = await ensureTranscriber(runId, 'zh');
+          const zhText = await runAsrOnBlob(zhPipe, segment.blob, transcribeOptions('zh'));
+          if (looksChinese(zhText)) {
+            app.languageHint = 'zh';
+            text = zhText;
+            log('中文纠错成功：后续分段将强制中文原文识别。', 'success');
+          } else {
+            app.languageHint = 'en';
+            log('中文纠错未检测到中文，后续按自动/英文路径继续。');
+          }
+        } catch (error) {
+          log('中文纠错试跑失败：' + error.message, 'warn');
+        }
+      } else if (looksChinese(text)) {
+        app.languageHint = 'zh';
+        log('首段检测到中文：后续分段将优先中文原文识别。', 'success');
+      } else if (looksEnglish(text)) {
+        app.languageHint = 'en';
+        log('首段检测到英文：后续分段将优先英文原文识别。', 'success');
+      }
+    }
+    return text;
+  }
+
+  function renderTranscript() {
     const parts = Array.from(app.transcriptBySegment.entries())
       .sort((a, b) => a[0] - b[0])
       .map((entry) => String(entry[1] || '').trim())
       .filter(Boolean);
     app.transcriptText = parts.join('\n');
-    const transcript = $('transcript-output');
-    if (transcript) {
-      transcript.value = app.transcriptText;
-      transcript.scrollTop = transcript.scrollHeight;
+    const output = $('transcript-output');
+    if (output) {
+      output.value = app.transcriptText;
+      output.scrollTop = output.scrollHeight;
     }
     setButton('download-txt-btn', Boolean(app.transcriptText));
     updateOneClickButton();
   }
 
-  function appendSegmentTranscript(segment, output, settings) {
-    const rawChunks = settings.timestampMode === 'accurate' ? normalizeChunks(output) : [];
-    let text = String(output && output.text ? output.text : rawChunks.map((x) => x.text).join(' ')).trim();
-    if (!text) text = '';
-
-    if (text) {
-      app.transcriptBySegment.set(segment.index, text);
-      if (settings.language === 'auto' && app.transcribedSegmentCount === 0) {
-        const hasCjk = /[\u3400-\u9fff]/.test(text);
-        const hasLatin = /[A-Za-z]/.test(text);
-        log('首段语言输出检测：' + (hasCjk ? '包含中文' : hasLatin ? '主要为英文/拉丁字符' : '未检测到明显中英文字符') + '。自动模式会保持原文转写；如果语言判断错误，请切换为“强制中文原文”或“强制英文原文”后重跑。');
-      }
-    }
-
-    // 产品当前只显示纯文本：不再生成或展示时间戳，避免用户看到 SRT 时间轴。
-    renderTranscriptOnly();
-  }
-
-  function finishSegmentTranscriptionIfDone() {
-    const captureActive = app.recorder && app.recorder.state !== 'inactive';
-    if (app.recoveringSegments || app.segmentProcessing || app.segmentQueue.length) return;
-    if (captureActive && !app.segmentStopRequested) {
-      const doneText = app.transcribedSegmentCount > 0
-        ? '已转写 ' + app.transcribedSegmentCount + ' 段，等待下一段音频。'
-        : '模型已准备，等待第一段音频。';
-      setProgress('asr', Math.max(35, Math.min(92, Number($('asr-percent')?.textContent?.replace('%', '')) || 35)), 'ASR 分段识别', doneText);
-      return;
-    }
+  function finishIfDone() {
+    if (app.captureActive || app.captureStopping || app.segmentProcessing || app.segmentQueue.length) return;
     if (app.capturedSegmentCount > 0 && app.transcribedSegmentCount >= app.capturedSegmentCount) {
-      setButton('transcribe-btn', true);
-      setButton('capture-start-btn', app.currentKind !== 'youtube' && app.mediaReadyForCapture);
-      setButton('capture-tab-btn', app.currentKind === 'youtube');
-      setProgress('asr', 100, '转文字完成', '已完成 ' + app.transcribedSegmentCount + ' / ' + app.capturedSegmentCount + ' 段，文本长度 ' + app.transcriptText.length + ' 字符。');
-      setProgress('overall', 100, '完成', '音频捕获和分段转文字完成。');
-      log('分段转文字完成：' + app.transcribedSegmentCount + ' / ' + app.capturedSegmentCount + ' 段，文本长度 ' + app.transcriptText.length + ' 字符。', 'success');
-      updateOneClickButton();
+      const failedText = app.failedSegmentCount ? '，失败跳过 ' + app.failedSegmentCount + ' 段' : '';
+      setProgress('asr', 100, '转文字完成', '已完成 ' + app.transcribedSegmentCount + ' / ' + app.capturedSegmentCount + ' 段' + failedText + '，文本长度 ' + app.transcriptText.length + ' 字符。');
+      setProgress('overall', 100, '完成', '全部音频分段已经转成纯文本。' + failedText);
+      log('全部转写完成：' + app.transcribedSegmentCount + ' / ' + app.capturedSegmentCount + ' 段' + failedText + '。', 'success');
     }
+    updateOneClickButton();
   }
 
   async function processSegmentQueue() {
     if (app.segmentProcessing) return;
     if (!app.segmentQueue.length) {
-      finishSegmentTranscriptionIfDone();
+      finishIfDone();
       return;
     }
     const runId = app.asrRunId;
     app.segmentProcessing = true;
     app.isTranscribing = true;
-    setButton('transcribe-btn', false);
     try {
-      const pipe = await ensureTranscriber(runId);
-      if (runId !== app.asrRunId) return;
       while (app.segmentQueue.length && runId === app.asrRunId) {
         const segment = app.segmentQueue.shift();
-        const settings = currentSettings();
-        const options = makeTranscribeOptions(settings);
-        const audioUrl = URL.createObjectURL(segment.blob);
-        const started = Date.now();
-        clearInterval(app.transcribeTimer);
-        app.transcribeTimer = setInterval(() => {
-          if (runId !== app.asrRunId) return;
-          const elapsed = (Date.now() - started) / 1000;
-          const localPct = Math.min(98, 35 + elapsed / Math.max(3, segment.duration * (navigator.gpu ? 0.7 : 1.8)) * 55);
-          const target = app.captureTargetSeconds > 0 ? app.captureTargetSeconds : Math.max(app.capturedSeconds, segment.end, app.transcribedSeconds + segment.duration);
-          const globalPct = target > 0 ? Math.min(98, 35 + ((app.transcribedSeconds + Math.min(segment.duration, elapsed)) / target) * 60) : localPct;
-          setProgress('asr', Math.max(localPct, globalPct), 'ASR 分段识别', '正在转写第 ' + segment.index + ' 段：' + segment.start.toFixed(1) + '-' + segment.end.toFixed(1) + ' 秒；已完成 ' + app.transcribedSegmentCount + ' / ' + app.capturedSegmentCount + ' 段。');
-          setProgress('overall', Math.min(98, 72 + Math.max(localPct, globalPct) * 0.26), '边录边转文字', 'ASR 队列处理中。');
-        }, 700);
+        const startTime = Date.now();
+        const progressTimer = setInterval(() => {
+          const elapsed = (Date.now() - startTime) / 1000;
+          const local = Math.min(98, 34 + elapsed / Math.max(4, segment.duration * (navigator.gpu ? 0.7 : 1.6)) * 52);
+          const target = app.captureTargetSeconds > 0 ? app.captureTargetSeconds : Math.max(mediaCoverageSeconds(), segment.end, 1);
+          const global = target > 0 ? Math.min(98, 34 + (Math.max(app.transcribedMediaSeconds, segment.start) / target) * 60) : local;
+          setProgress('asr', Math.max(local, global), '转文字', '正在识别第 ' + segment.index + ' 段；已完成 ' + app.transcribedSegmentCount + ' / ' + app.capturedSegmentCount + ' 段。');
+        }, 500);
         try {
-          log('开始转写第 ' + segment.index + ' 段：' + formatBytes(segment.blob.size) + '，' + segment.start.toFixed(1) + '-' + segment.end.toFixed(1) + ' 秒。');
-          const output = await pipe(audioUrl, options);
-          appendSegmentTranscript(segment, output, settings);
+          log('开始识别第 ' + segment.index + ' 段，覆盖 ' + segment.start.toFixed(1) + '-' + segment.end.toFixed(1) + ' 秒。');
+          const text = await transcribeSegment(segment, runId);
+          if (runId !== app.asrRunId) break;
+          if (text) app.transcriptBySegment.set(segment.index, text);
           app.transcribedSegmentCount += 1;
-          app.transcribedSeconds = Math.max(app.transcribedSeconds, segment.end);
-          const target = app.captureTargetSeconds > 0 ? app.captureTargetSeconds : Math.max(app.capturedSeconds, app.transcribedSeconds);
-          const pct = target > 0 ? Math.min(99, 35 + (app.transcribedSeconds / target) * 60) : Math.min(96, 35 + app.transcribedSegmentCount * 4);
-          setProgress('asr', pct, 'ASR 分段识别', '第 ' + segment.index + ' 段完成；累计完成 ' + app.transcribedSegmentCount + ' / ' + app.capturedSegmentCount + ' 段。');
-          log('第 ' + segment.index + ' 段转写完成。', 'success');
+          app.transcribedMediaSeconds = Math.max(app.transcribedMediaSeconds, segment.end);
+          renderTranscript();
+          const target = app.captureTargetSeconds > 0 ? app.captureTargetSeconds : Math.max(mediaCoverageSeconds(), app.transcribedMediaSeconds, 1);
+          const pct = Math.min(99, 34 + (app.transcribedMediaSeconds / target) * 60);
+          setProgress('asr', pct, '转文字', '第 ' + segment.index + ' 段完成；累计 ' + app.transcribedSegmentCount + ' / ' + app.capturedSegmentCount + ' 段。');
+          log('第 ' + segment.index + ' 段识别完成。', 'success');
         } catch (error) {
-          log('第 ' + segment.index + ' 段转写失败：' + error.message, 'error');
+          if (runId !== app.asrRunId) break;
+          app.failedSegmentCount += 1;
+          app.transcribedSegmentCount += 1;
+          app.transcribedMediaSeconds = Math.max(app.transcribedMediaSeconds, segment.end);
+          log('第 ' + segment.index + ' 段识别失败，已跳过并继续后续分段：' + error.message, 'error');
+          setProgress('asr', 60, '转文字', '第 ' + segment.index + ' 段失败并跳过；继续处理后续分段。');
         } finally {
-          URL.revokeObjectURL(audioUrl);
-          clearInterval(app.transcribeTimer);
-          app.transcribeTimer = null;
+          clearInterval(progressTimer);
         }
       }
     } catch (error) {
       setProgress('asr', 100, '转文字失败', error.message);
       setProgress('overall', 100, '失败', error.message);
       log('转文字失败：' + error.message, 'error');
-      alert('转文字失败：' + error.message + '。可以先确认模型缓存是否预热成功，或把分段长度调到 30 秒再试。');
+      if (runId === app.asrRunId) alert('转文字失败：' + error.message);
     } finally {
       if (runId === app.asrRunId) {
         app.segmentProcessing = false;
         app.isTranscribing = false;
-        finishSegmentTranscriptionIfDone();
         if (app.segmentQueue.length) processSegmentQueue();
+        else finishIfDone();
       }
     }
   }
 
-  async function transcribe() {
-    if (app.segmentQueue.length || app.segmentProcessing) {
-      processSegmentQueue();
+  async function inspectLink(input) {
+    const info = classifyUrl(input);
+    setStatus('check-type', info.label, info.kind === 'invalid' ? 'bad' : info.kind === 'page' ? 'warn' : 'ok');
+    log('链接类型：' + info.label + '。');
+    const probe = await probeHttp(input, info.kind);
+    setStatus('check-connect', probe.ok ? '可连接' : (info.kind === 'page' ? '不是媒体' : '需播放验证'), probe.state);
+    log(probe.message, probe.ok ? 'success' : probe.state === 'bad' ? 'error' : 'warn');
+    if (info.kind === 'invalid') throw new Error('URL 格式无效。');
+    if (info.kind === 'page') {
+      setStatus('check-control', '不可操作', 'warn');
+      setStatus('check-play', '不可播放', 'warn');
+      setStatus('check-capture', '不可捕获', 'warn');
+      throw new Error('普通网页不是媒体直链；请输入 YouTube 链接、MP4/MP3/WAV/HLS 直链。');
+    }
+    if (info.kind === 'youtube') {
+      await inspectYouTube(input, info.youtubeId);
+      return info;
+    }
+    await inspectNative(input, info.kind);
+    return info;
+  }
+
+  async function runOneClick() {
+    if (app.captureActive || app.captureStopping) {
+      stopCapture();
+      updateOneClickButton();
       return;
     }
-    if (app.capturedBlob && app.capturedBlob.size > 0 && !app.transcriptText) {
-      const duration = app.capturedSeconds || 0;
-      app.segmentQueue.push({ index: 1, start: 0, end: duration, duration, blob: app.capturedBlob });
-      app.capturedSegmentCount = Math.max(app.capturedSegmentCount, 1);
-      processSegmentQueue();
-      return;
+    if (app.segmentProcessing || app.segmentQueue.length) {
+      const restart = confirm('当前仍在转写队列中。确定要中断并重新开始吗？');
+      if (!restart) return;
     }
-    if (app.transcriptText) {
-      alert('当前音频已经转写完成。');
-      return;
+    const input = ($('source-url')?.value || '').trim();
+    if (!input) return alert('请输入链接。');
+    resetForNewRun();
+    app.currentUrl = input;
+    updateOneClickButton('running');
+    setProgress('overall', 3, '链接检测', '开始检测链接。');
+    try {
+      const info = await inspectLink(input);
+      if (info.kind === 'youtube') {
+        const captionOk = await tryYouTubeCaptions(info.youtubeId);
+        if (captionOk) return;
+        setStatus('check-capture', '需要标签页音频授权', 'warn');
+        setProgress('audio', 2, '标签页音频捕获', '准备请求浏览器授权。');
+        await startTabCapture();
+        return;
+      }
+      await startNativeCapture();
+    } catch (error) {
+      stopDisplayCaptureTracks();
+      stopCaptureStreamTracks();
+      pauseSourcePlayback();
+      app.captureActive = false;
+      app.captureStopping = false;
+      setProgress('overall', 100, '失败', error.message);
+      log('流程失败：' + error.message, 'error');
+      alert(error.message);
+    } finally {
+      updateOneClickButton();
     }
-    alert('还没有可转写的音频分段。');
   }
 
   function download(name, blob) {
@@ -1560,41 +1474,32 @@
   }
 
   function downloadAudio() {
-    if (!app.capturedBlob) return alert('没有可下载的音频。');
+    if (!app.capturedBlob || app.capturedBlob.size <= 0) return alert('当前版本为长视频低内存文本模式，不再聚合完整音频文件；请下载 TXT。');
     const ext = app.capturedBlob.type.includes('mp4') ? 'm4a' : 'webm';
     download('subtitle-download-audio-' + Date.now() + '.' + ext, app.capturedBlob);
-    log('已触发音频下载。', 'success');
   }
 
   function downloadTxt() {
     if (!app.transcriptText) return alert('没有可下载的文本。');
     download('subtitle-download-transcript-' + Date.now() + '.txt', new Blob([app.transcriptText], { type: 'text/plain;charset=utf-8' }));
-    log('已触发 TXT 下载。', 'success');
   }
 
-  function downloadSrt() {
-    if (!app.transcriptSrt) return alert('没有可下载的 SRT。');
-    download('subtitle-download-transcript-' + Date.now() + '.srt', new Blob([app.transcriptSrt], { type: 'application/x-subrip;charset=utf-8' }));
-    log('已触发 SRT 下载。', 'success');
-  }
-
-  function updateOneClickButton() {
+  function updateOneClickButton(forcedState = '') {
     const btn = $('one-click-btn');
     if (!btn) return;
-    const active = app.recorder && app.recorder.state !== 'inactive';
     btn.disabled = false;
-    if (active) {
+    if (app.captureActive || app.captureStopping) {
       btn.textContent = '停止捕获并完成转文字';
       btn.className = 'btn btn-dark';
       return;
     }
-    if (app.oneClickAwaitingTabCapture) {
-      btn.textContent = '授权捕获当前标签页音频并转文字';
-      btn.className = 'btn btn-amber';
+    if (forcedState === 'running') {
+      btn.textContent = '正在检测并准备捕获';
+      btn.className = 'btn btn-primary';
       return;
     }
     if (app.segmentProcessing || app.segmentQueue.length) {
-      btn.textContent = '正在转写，点击可重新开始';
+      btn.textContent = '正在转文字，点击可重新开始';
       btn.className = 'btn btn-primary';
       return;
     }
@@ -1607,56 +1512,18 @@
     btn.className = 'btn btn-green';
   }
 
-  async function runOneClick() {
-    const active = app.recorder && app.recorder.state !== 'inactive';
-    if (active) {
-      stopCapture();
-      updateOneClickButton();
-      return;
-    }
-    const input = ($('source-url')?.value || '').trim();
-    if (!input) {
-      alert('请输入 YouTube 链接、视频直链或音频直链。');
-      return;
-    }
-    if (app.oneClickAwaitingTabCapture && app.currentKind === 'youtube' && app.currentUrl === input) {
-      await startTabCapture();
-      updateOneClickButton();
-      return;
-    }
-    const info = classifyUrl(input);
-    if (info.kind === 'youtube') {
-      await inspect(false);
-      app.oneClickAwaitingTabCapture = true;
-      updateOneClickButton();
-      await startTabCapture();
-      updateOneClickButton();
-      return;
-    }
-    app.oneClickAwaitingTabCapture = false;
-    await inspect(true);
-    updateOneClickButton();
-  }
-
   function wire() {
     $('one-click-btn')?.addEventListener('click', () => runOneClick());
-    $('inspect-btn')?.addEventListener('click', () => inspect(false));
-    $('auto-btn')?.addEventListener('click', () => inspect(true));
-    $('capture-start-btn')?.addEventListener('click', () => startCapture());
-    $('capture-tab-btn')?.addEventListener('click', () => startTabCapture());
-    $('capture-stop-btn')?.addEventListener('click', () => stopCapture());
-    $('prewarm-btn')?.addEventListener('click', () => warmupModel('manual'));
-    $('transcribe-btn')?.addEventListener('click', () => transcribe());
     $('download-audio-btn')?.addEventListener('click', () => downloadAudio());
     $('download-txt-btn')?.addEventListener('click', () => downloadTxt());
-    $('download-srt-btn')?.addEventListener('click', () => downloadSrt());
-    ['language-select', 'model-select', 'playback-rate'].forEach((id) => {
+    $('open-player-btn')?.addEventListener('click', () => openPlayerPage());
+    $('prewarm-btn')?.addEventListener('click', () => warmupModel('manual'));
+    ['language-select', 'model-select'].forEach((id) => {
       $(id)?.addEventListener('change', () => {
-        if (id === 'playback-rate') { log('捕获播放倍速已变化，下一次捕获生效。'); return; }
-        log('识别设置已变化，将预热新模型。');
-        scheduleWarmup(250);
+        log('识别设置已变化；不会自动下载模型，下一次本地 ASR 或手动预热时生效。');
       });
     });
+    $('playback-rate')?.addEventListener('change', () => log('播放倍速已变化，下一次捕获生效。'));
     document.querySelectorAll('[data-example]').forEach((button) => {
       button.addEventListener('click', () => {
         const input = $('source-url');
@@ -1667,11 +1534,9 @@
     resetProgress();
     resetOutputs();
     clearLog();
-    setButton('capture-start-btn', false);
-    setButton('capture-tab-btn', false);
-    setButton('capture-stop-btn', false);
     updateOneClickButton();
-    registerServiceWorker().finally(() => scheduleWarmup(1200));
+    registerServiceWorker();
+    log('模型不会在打开页面时自动下载；优先直取 YouTube 字幕，只有需要本地 ASR 时才加载模型。');
   }
 
   document.addEventListener('DOMContentLoaded', wire);

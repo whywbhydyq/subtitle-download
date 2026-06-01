@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>subtitle-download - 独立播放页</title>
+  <meta name="description" content="subtitle-download 独立播放页，用于检查链接能否播放。">
+  <link rel="stylesheet" href="assets/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.18/dist/hls.min.js" defer></script>
+</head>
+<body>
+  <main class="shell compact-main player-page">
+    <section class="panel">
+      <div class="panel-inner">
+        <div class="player-topbar">
+          <div>
+            <h1 class="player-title">独立播放页</h1>
+            <p class="subtle" style="margin:8px 0 0">这里只负责播放和人工检查；转文字请回到主页面。</p>
+          </div>
+          <a class="btn btn-outline player-back" href="index.html">返回转文字</a>
+        </div>
+        <div class="form-row">
+          <label for="play-url">视频 / 音频链接</label>
+          <input id="play-url" class="input" type="url" spellcheck="false" placeholder="https://www.youtube.com/watch?v=... 或媒体直链">
+        </div>
+        <div class="actions single-action">
+          <button id="load-player-btn" class="btn btn-green" type="button">加载到播放器</button>
+        </div>
+        <div id="play-status" class="notice player-notice">等待加载。</div>
+        <div id="native-player-wrap" class="media-shell hidden">
+          <video id="native-player" controls crossorigin="anonymous" playsinline></video>
+        </div>
+        <div id="youtube-player-wrap" class="media-shell hidden">
+          <div id="youtube-player-visible" style="width:100%;height:100%"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script>
+  (() => {
+    'use strict';
+    const $ = (id) => document.getElementById(id);
+    let hls = null;
+    let ytPlayer = null;
+    let ytApiPromise = null;
+
+    function parseYouTubeId(input) {
+      try {
+        const url = new URL(input);
+        const host = url.hostname.replace(/^www\./, '').toLowerCase();
+        if (host === 'youtu.be') return url.pathname.split('/').filter(Boolean)[0] || '';
+        if (host.endsWith('youtube.com') || host.endsWith('youtube-nocookie.com')) {
+          const direct = url.searchParams.get('v');
+          if (direct) return direct;
+          const parts = url.pathname.split('/').filter(Boolean);
+          if (['embed', 'shorts', 'live'].includes(parts[0]) && parts[1]) return parts[1];
+        }
+      } catch (_) {}
+      return '';
+    }
+
+    function isHls(input) {
+      return /\.m3u8($|\?)/i.test(input) || /m3u8/i.test(input);
+    }
+
+    function setStatus(text) { $('play-status').textContent = text; }
+
+    function loadYouTubeApi() {
+      if (window.YT && window.YT.Player) return Promise.resolve(window.YT);
+      if (ytApiPromise) return ytApiPromise;
+      ytApiPromise = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('YouTube IFrame API 加载超时。')), 15000);
+        window.onYouTubeIframeAPIReady = () => { clearTimeout(timer); resolve(window.YT); };
+        const script = document.createElement('script');
+        script.src = 'https://www.youtube.com/iframe_api';
+        script.onerror = () => { clearTimeout(timer); reject(new Error('YouTube IFrame API 加载失败。')); };
+        document.head.appendChild(script);
+      });
+      return ytApiPromise;
+    }
+
+    function resetPlayers() {
+      if (hls) { try { hls.destroy(); } catch (_) {} hls = null; }
+      if (ytPlayer && typeof ytPlayer.destroy === 'function') { try { ytPlayer.destroy(); } catch (_) {} }
+      ytPlayer = null;
+      const native = $('native-player');
+      try { native.pause(); } catch (_) {}
+      native.removeAttribute('src');
+      native.load();
+      $('native-player-wrap').classList.add('hidden');
+      $('youtube-player-wrap').classList.add('hidden');
+      $('youtube-player-visible').innerHTML = '';
+    }
+
+    async function loadPlayer() {
+      const input = ($('play-url').value || '').trim();
+      if (!input) return setStatus('请输入链接。');
+      resetPlayers();
+      const ytId = parseYouTubeId(input);
+      try {
+        if (ytId) {
+          setStatus('正在加载 YouTube 播放器，默认不自动播放。');
+          $('youtube-player-wrap').classList.remove('hidden');
+          const api = await loadYouTubeApi();
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('YouTube 播放器 ready 超时。')), 15000);
+            ytPlayer = new api.Player('youtube-player-visible', {
+              videoId: ytId,
+              width: '100%',
+              height: '100%',
+              playerVars: { playsinline: 1, origin: window.location.origin, rel: 0 },
+              events: {
+                onReady: () => { clearTimeout(timer); setStatus('YouTube 可播放，当前默认暂停。'); resolve(); },
+                onError: (event) => { setStatus('YouTube 播放错误：' + event.data); }
+              }
+            });
+          });
+          return;
+        }
+        const media = $('native-player');
+        $('native-player-wrap').classList.remove('hidden');
+        setStatus('正在加载媒体，默认不自动播放。');
+        if (isHls(input)) {
+          if (window.Hls && window.Hls.isSupported()) {
+            hls = new window.Hls({ enableWorker: true, backBufferLength: 30 });
+            hls.loadSource(input);
+            hls.attachMedia(media);
+          } else if (media.canPlayType('application/vnd.apple.mpegurl')) {
+            media.src = input;
+          } else {
+            throw new Error('当前浏览器不能播放 HLS。');
+          }
+        } else {
+          media.src = input;
+        }
+        media.addEventListener('loadedmetadata', () => setStatus('媒体可播放，当前默认暂停。'), { once: true });
+        media.addEventListener('error', () => setStatus('媒体加载失败。'), { once: true });
+        media.load();
+      } catch (error) {
+        setStatus('加载失败：' + error.message);
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const params = new URLSearchParams(location.search);
+      const url = params.get('url') || '';
+      if (url) $('play-url').value = url;
+      $('load-player-btn').addEventListener('click', loadPlayer);
+      if (url) loadPlayer();
+    });
+  })();
+  </script>
+</body>
+</html>

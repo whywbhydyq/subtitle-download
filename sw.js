@@ -1,10 +1,12 @@
-const CACHE_NAME = 'subtitle-download-v7-one-button-fulltext-cache';
-const STATIC_ASSETS = [
+const CACHE_NAME = 'subtitle-download-v10-deep-audit-cache';
+const STATIC_ASSETS = new Set([
   './',
   './index.html',
+  './play.html',
+  './404.html',
   './assets/styles.css',
   './assets/subtitle-download.js'
-];
+]);
 
 function isAsrAsset(url) {
   const host = url.hostname.toLowerCase();
@@ -16,10 +18,18 @@ function isAsrAsset(url) {
     host.endsWith('cdn-lfs.huggingface.co');
 }
 
+function isStaticAsset(url) {
+  if (url.origin !== self.location.origin) return false;
+  const path = './' + url.pathname.replace(/^\//, '');
+  return STATIC_ASSETS.has(path) || (url.pathname === '/' && STATIC_ASSETS.has('./'));
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
-    await cache.addAll(STATIC_ASSETS.map((path) => new Request(path, { cache: 'reload' })));
+    await Promise.all(Array.from(STATIC_ASSETS).map(async (path) => {
+      try { await cache.add(new Request(path, { cache: 'reload' })); } catch (_) {}
+    }));
     await self.skipWaiting();
   })());
 });
@@ -35,17 +45,15 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   if (request.method !== 'GET') return;
-
+  if (request.headers.has('range')) return;
   const url = new URL(request.url);
-  const sameOrigin = url.origin === self.location.origin;
-  const shouldCache = sameOrigin || isAsrAsset(url);
+  const shouldCache = isStaticAsset(url) || isAsrAsset(url);
   if (!shouldCache) return;
 
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);
     const cached = await cache.match(request, { ignoreSearch: false });
     if (cached) return cached;
-
     try {
       const response = await fetch(request);
       if (response && (response.ok || response.type === 'opaque' || response.type === 'cors')) {

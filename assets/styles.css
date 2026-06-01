@@ -123,3 +123,34 @@ video { max-height: 430px; }
 .single-download { grid-template-columns: 1fr; }
 .result-textarea { min-height: 420px; font-size: 16px; line-height: 1.75; }
 @media (max-width: 720px) { .compact-main { padding-top: 14px; } }
+
+.no-top-margin { margin-top: 0; }
+.compact-badges { margin-top: 8px; }
+.secondary-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.diagnostic-media-host {
+  position: fixed;
+  left: -10000px;
+  top: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+.diagnostic-media-host video,
+.diagnostic-media-host iframe,
+.diagnostic-media-host #youtube-player {
+  width: 1px !important;
+  height: 1px !important;
+}
+.player-page { padding-top: 28px; padding-bottom: 48px; }
+.player-topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.player-title { margin: 0; font-size: clamp(28px, 4vw, 46px); letter-spacing: -0.06em; line-height: 1; }
+.player-back { text-decoration: none; min-width: 140px; }
+.player-notice { margin-top: 16px; }
+#youtube-player-wrap { aspect-ratio: 16 / 9; }
+#native-player { max-height: 70vh; }
+@media (max-width: 720px) {
+  .secondary-actions, .player-topbar { grid-template-columns: 1fr; flex-direction: column; }
+  .player-back { width: 100%; }
+}
