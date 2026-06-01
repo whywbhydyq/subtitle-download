@@ -36,6 +36,8 @@
     transcribeTimer: null,
     captureStartedAt: 0,
     capturedSeconds: 0,
+    captureTargetSeconds: 0,
+    captureHardLimitSeconds: 0,
     capturedBlob: null,
     capturedUrl: '',
     displayStream: null,
@@ -50,7 +52,24 @@
     isWarmingModel: false,
     warmupTimer: null,
     serviceWorkerReady: false,
-    asrRunId: 0
+    asrRunId: 0,
+    segmentSessionId: 0,
+    segmentMode: true,
+    segmentSeconds: 45,
+    segmentRecorder: null,
+    segmentTimer: null,
+    segmentStartedAt: 0,
+    segmentIndex: 0,
+    segmentQueue: [],
+    segmentProcessing: false,
+    segmentStopRequested: false,
+    segmentCaptureStream: null,
+    segmentMime: '',
+    segmentResults: [],
+    audioParts: [],
+    capturedSegmentCount: 0,
+    transcribedSegmentCount: 0,
+    transcribedSeconds: 0
   };
 
   function timeNow() {
@@ -148,14 +167,28 @@
 
   function resetOutputs() {
     app.asrRunId += 1;
+    app.segmentSessionId += 1;
     app.isTranscribing = false;
+    app.segmentProcessing = false;
+    app.segmentStopRequested = false;
     clearInterval(app.transcribeTimer);
+    clearTimeout(app.segmentTimer);
     app.transcribeTimer = null;
+    app.segmentTimer = null;
     if (app.capturedUrl) URL.revokeObjectURL(app.capturedUrl);
     app.captureMode = '';
     app.capturedUrl = '';
     app.capturedBlob = null;
     app.chunks = [];
+    app.audioParts = [];
+    app.segmentQueue = [];
+    app.segmentResults = [];
+    app.segmentRecorder = null;
+    app.segmentCaptureStream = null;
+    app.segmentIndex = 0;
+    app.capturedSegmentCount = 0;
+    app.transcribedSegmentCount = 0;
+    app.transcribedSeconds = 0;
     app.capturedSeconds = 0;
     app.transcriptText = '';
     app.transcriptSrt = '';
@@ -476,7 +509,13 @@
             log('YouTube 播放状态：' + label + '。');
             if (event.data === 1) {
               setStatus('check-play', '可播放', 'ok');
-              setProgress('overall', 52, 'YouTube 播放', 'YouTube 正在播放；音频捕获不可用。');
+              setProgress('overall', 52, 'YouTube 播放', 'YouTube 正在播放；iframe 不能直接捕获，需使用标签页音频授权。');
+            } else if (event.data === 0) {
+              setStatus('check-play', '已结束', 'ok');
+              if (app.recorder && app.recorder.state !== 'inactive' && app.captureMode === '当前标签页音频捕获') {
+                log('YouTube 视频已结束，自动停止标签页音频捕获。', 'success');
+                stopCapture();
+              }
             } else if (event.data === 3) {
               setStatus('check-play', '缓冲中', 'pending');
               setProgress('overall', 44, 'YouTube 播放', 'YouTube 正在缓冲。');
@@ -496,19 +535,44 @@
 
     setStatus('check-capture', '可授权捕获标签页', 'warn');
     setButton('capture-tab-btn', true);
-    setProgress('audio', 0, '音频提取', '等待点击“捕获当前标签页音频”。请在浏览器弹窗里选择当前标签页并勾选共享音频。');
+    setProgress('audio', 0, '音频提取', '等待点击“捕获当前标签页音频”。默认会录到视频结束或手动停止；也可以填写指定秒数。');
     setProgress('asr', 0, 'ASR 识别', '捕获完成后会自动开始本地转文字。');
     log('结论：该 YouTube 链接可连接、可操作；下一步点击“捕获当前标签页音频”，授权后即可录制标签页声音并转文字。', 'success');
     return false;
   }
 
   function currentSettings() {
+    const rawSeconds = Number($('capture-seconds')?.value);
+    const seconds = Number.isFinite(rawSeconds) && rawSeconds > 0
+      ? Math.max(5, Math.min(14400, rawSeconds))
+      : 0;
+    const rawSegmentSeconds = Number($('segment-seconds')?.value);
+    const segmentSeconds = Number.isFinite(rawSegmentSeconds) && rawSegmentSeconds > 0
+      ? Math.max(10, Math.min(300, rawSegmentSeconds))
+      : 45;
     return {
       language: $('language-select')?.value || 'auto',
       model: $('model-select')?.value || 'tiny',
-      seconds: Math.max(5, Math.min(1800, Number($('capture-seconds')?.value) || 20)),
+      seconds,
+      unlimitedCapture: seconds === 0,
+      segmentSeconds,
       timestampMode: $('timestamp-mode')?.value || 'fast'
     };
+  }
+
+  function getRemainingMediaSeconds() {
+    try {
+      if (app.currentKind === 'youtube' && app.ytPlayer && typeof app.ytPlayer.getDuration === 'function') {
+        const duration = Number(app.ytPlayer.getDuration());
+        const current = typeof app.ytPlayer.getCurrentTime === 'function' ? Number(app.ytPlayer.getCurrentTime()) : 0;
+        if (Number.isFinite(duration) && duration > 0) return Math.max(0, duration - (Number.isFinite(current) ? current : 0));
+      }
+      const media = $('media-element');
+      if (media && Number.isFinite(media.duration) && media.duration > 0) {
+        return Math.max(0, media.duration - (Number.isFinite(media.currentTime) ? media.currentTime : 0));
+      }
+    } catch (_) {}
+    return 0;
   }
 
   async function inspect(autoCapture = false) {
@@ -568,12 +632,18 @@
     }
   }
 
-  function startCaptureTimer(seconds) {
+  function startCaptureTimer(targetSeconds, hardLimitSeconds) {
+    app.captureTargetSeconds = Number(targetSeconds) || 0;
+    app.captureHardLimitSeconds = Number(hardLimitSeconds) || 0;
     app.captureTimer = setInterval(() => {
       const elapsed = (Date.now() - app.captureStartedAt) / 1000;
       const bytes = app.chunks.reduce((sum, chunk) => sum + chunk.size, 0);
-      const pct = Math.min(100, (elapsed / seconds) * 100);
-      setProgress('audio', pct, app.captureMode || '音频提取', '正在捕获音频：' + elapsed.toFixed(1) + ' / ' + seconds + ' 秒，已缓存 ' + formatBytes(bytes) + '。');
+      const target = app.captureTargetSeconds > 0 ? app.captureTargetSeconds : 0;
+      const pct = target > 0 ? Math.min(100, (elapsed / target) * 100) : Math.min(95, 8 + elapsed / 18);
+      const limitText = target > 0
+        ? elapsed.toFixed(1) + ' / ' + target.toFixed(1) + ' 秒'
+        : elapsed.toFixed(1) + ' 秒 / 全长或手动停止';
+      setProgress('audio', pct, app.captureMode || '音频提取', '正在捕获音频：' + limitText + '，已缓存 ' + formatBytes(bytes) + '。');
       setProgress('overall', Math.min(72, 58 + pct * 0.14), '音频提取', '音频捕获进行中。');
     }, 500);
   }
@@ -588,6 +658,8 @@
       app.capturedBlob = new Blob(app.chunks, { type });
       app.capturedUrl = URL.createObjectURL(app.capturedBlob);
       app.capturedSeconds = Math.max(0.1, (Date.now() - app.captureStartedAt) / 1000);
+      app.captureTargetSeconds = 0;
+      app.captureHardLimitSeconds = 0;
       stopDisplayCaptureTracks();
       setButton('capture-start-btn', app.currentKind !== 'youtube' && app.mediaReadyForCapture);
       setButton('capture-tab-btn', app.currentKind === 'youtube');
@@ -601,38 +673,152 @@
     };
   }
 
-  async function startRecorderFromAudioStream(audioStream, mime, seconds, modeLabel) {
+  function enqueueSegment(segment) {
+    app.segmentQueue.push(segment);
+    app.capturedSegmentCount += 1;
+    const target = app.captureTargetSeconds > 0 ? app.captureTargetSeconds : 0;
+    const pct = target > 0 ? Math.min(96, (segment.end / target) * 100) : Math.min(96, 8 + segment.end / 18);
+    setProgress('audio', pct, app.captureMode || '音频提取', '已切出第 ' + segment.index + ' 段：' + segment.start.toFixed(1) + '-' + segment.end.toFixed(1) + ' 秒，等待/正在转写。');
+    log('音频第 ' + segment.index + ' 段已进入转写队列：' + formatBytes(segment.blob.size) + '，' + segment.start.toFixed(1) + '-' + segment.end.toFixed(1) + ' 秒。', 'success');
+    processSegmentQueue();
+  }
+
+  function shouldContinueSegmenting() {
+    if (app.segmentStopRequested) return false;
+    if (!app.segmentCaptureStream) return false;
+    if (!app.segmentCaptureStream.getAudioTracks().some((track) => track.readyState === 'live')) return false;
+    if (app.captureHardLimitSeconds > 0) {
+      const elapsed = (Date.now() - app.captureStartedAt) / 1000;
+      if (elapsed >= app.captureHardLimitSeconds - 0.2) return false;
+    }
+    return true;
+  }
+
+  function startSegmentRecorder(sessionId) {
+    if (sessionId !== app.segmentSessionId || !app.segmentCaptureStream) return;
+    const localParts = [];
+    const index = app.segmentIndex + 1;
+    app.segmentIndex = index;
+    const segmentStartOffset = Math.max(0, (Date.now() - app.captureStartedAt) / 1000);
+    const segmentStartedAt = Date.now();
+    const recorder = new MediaRecorder(app.segmentCaptureStream, { mimeType: app.segmentMime, audioBitsPerSecond: 32000 });
+    app.segmentRecorder = recorder;
+    app.recorder = recorder;
+
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) {
+        localParts.push(event.data);
+        app.audioParts.push(event.data);
+        app.chunks.push(event.data);
+      }
+    };
+    recorder.onerror = (event) => {
+      log('MediaRecorder 错误：' + (event.error ? event.error.message : '未知错误'), 'error');
+    };
+    recorder.onstop = () => {
+      clearTimeout(app.segmentTimer);
+      app.segmentTimer = null;
+      if (sessionId !== app.segmentSessionId) return;
+      const duration = Math.max(0.05, (Date.now() - segmentStartedAt) / 1000);
+      const segmentEndOffset = Math.max(segmentStartOffset + duration, (Date.now() - app.captureStartedAt) / 1000);
+      if (localParts.length) {
+        enqueueSegment({
+          index,
+          start: segmentStartOffset,
+          end: segmentEndOffset,
+          duration,
+          blob: new Blob(localParts, { type: app.segmentMime || 'audio/webm' })
+        });
+      }
+      if (shouldContinueSegmenting()) {
+        startSegmentRecorder(sessionId);
+      } else {
+        finalizeSegmentCapture(sessionId);
+      }
+    };
+
+    recorder.start(1000);
+    const settings = currentSettings();
+    const segmentSeconds = Math.max(10, Number(settings.segmentSeconds) || 45);
+    let nextSeconds = segmentSeconds;
+    if (app.captureHardLimitSeconds > 0) {
+      const elapsed = (Date.now() - app.captureStartedAt) / 1000;
+      nextSeconds = Math.max(0.5, Math.min(segmentSeconds, app.captureHardLimitSeconds - elapsed));
+    }
+    app.segmentTimer = setTimeout(() => {
+      if (recorder.state !== 'inactive') recorder.stop();
+    }, nextSeconds * 1000);
+  }
+
+  function finalizeSegmentCapture(sessionId) {
+    if (sessionId !== app.segmentSessionId) return;
+    app.segmentStopRequested = true;
+    clearInterval(app.captureTimer);
+    clearTimeout(app.stopTimer);
+    clearTimeout(app.segmentTimer);
+    app.captureTimer = null;
+    app.stopTimer = null;
+    app.segmentTimer = null;
+    const type = app.segmentMime || 'audio/webm';
+    app.capturedBlob = new Blob(app.audioParts, { type });
+    if (app.capturedUrl) URL.revokeObjectURL(app.capturedUrl);
+    app.capturedUrl = app.capturedBlob.size ? URL.createObjectURL(app.capturedBlob) : '';
+    app.capturedSeconds = Math.max(0.1, (Date.now() - app.captureStartedAt) / 1000);
+    app.captureTargetSeconds = 0;
+    app.captureHardLimitSeconds = 0;
+    app.segmentRecorder = null;
+    app.recorder = null;
+    stopDisplayCaptureTracks();
+    setButton('capture-start-btn', app.currentKind !== 'youtube' && app.mediaReadyForCapture);
+    setButton('capture-tab-btn', app.currentKind === 'youtube');
+    setButton('capture-stop-btn', false);
+    setButton('download-audio-btn', app.capturedBlob.size > 0);
+    setButton('transcribe-btn', app.capturedBlob.size > 0 || app.segmentQueue.length > 0);
+    setProgress('audio', 100, '音频提取', '音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒，共 ' + app.capturedSegmentCount + ' 段。');
+    log('音频捕获完成：' + formatBytes(app.capturedBlob.size) + '，约 ' + app.capturedSeconds.toFixed(1) + ' 秒，共 ' + app.capturedSegmentCount + ' 段。', 'success');
+    processSegmentQueue();
+    finishSegmentTranscriptionIfDone();
+  }
+
+  async function startRecorderFromAudioStream(audioStream, mime, seconds, modeLabel, expectedSeconds = 0) {
     if (!audioStream || !audioStream.getAudioTracks().length) throw new Error('没有可录制的音轨。');
     resetOutputs();
-    setProgress('asr', 0, 'ASR 识别', '等待音频捕获完成。');
+    const sessionId = app.segmentSessionId;
+    setProgress('asr', 0, 'ASR 分段识别', '边捕获边转文字：不再等完整 40 分钟音频录完才开始识别。');
     app.chunks = [];
+    app.audioParts = [];
     app.capturedBlob = null;
     app.captureStartedAt = Date.now();
     app.captureMode = modeLabel;
-    app.recorder = new MediaRecorder(audioStream, { mimeType: mime, audioBitsPerSecond: 32000 });
-    app.recorder.ondataavailable = (event) => {
-      if (event.data && event.data.size > 0) app.chunks.push(event.data);
-    };
-    app.recorder.onerror = (event) => {
-      log('MediaRecorder 错误：' + (event.error ? event.error.message : '未知错误'), 'error');
-    };
-    app.recorder.onstop = recorderStopHandler(mime);
+    app.segmentCaptureStream = audioStream;
+    app.segmentMime = mime || 'audio/webm';
+    app.segmentStopRequested = false;
+    const hardLimitSeconds = Number(seconds) || 0;
+    const targetSeconds = hardLimitSeconds > 0 ? hardLimitSeconds : (Number(expectedSeconds) || 0);
+    app.captureHardLimitSeconds = hardLimitSeconds;
+    app.captureTargetSeconds = targetSeconds;
+
     audioStream.getAudioTracks().forEach((track) => {
       track.onended = () => {
         log('音频轨道已结束。', 'warn');
-        if (app.recorder && app.recorder.state !== 'inactive') stopCapture();
+        stopCapture();
       };
     });
 
-    app.recorder.start(1000);
     setButton('capture-start-btn', false);
     setButton('capture-tab-btn', false);
     setButton('capture-stop-btn', true);
-    setProgress('audio', 0, '音频提取', '正在捕获音频：0.0 / ' + seconds + ' 秒。');
-    log('开始' + modeLabel + '，最长 ' + seconds + ' 秒，录制格式：' + mime + '。');
-    scheduleWarmup(150);
-    startCaptureTimer(seconds);
-    app.stopTimer = setTimeout(() => stopCapture(), seconds * 1000);
+    const settings = currentSettings();
+    const limitText = hardLimitSeconds > 0
+      ? '0.0 / ' + hardLimitSeconds + ' 秒'
+      : (targetSeconds > 0 ? '0.0 / 全长约 ' + targetSeconds.toFixed(1) + ' 秒' : '0.0 秒 / 全长或手动停止');
+    setProgress('audio', 0, '音频提取', '正在捕获音频：' + limitText + '。分段长度：' + settings.segmentSeconds + ' 秒。');
+    setProgress('asr', 0, 'ASR 分段识别', '模型预热后会边录边识别，每完成一段就追加到结果。');
+    log('开始' + modeLabel + '，' + (hardLimitSeconds > 0 ? '最长 ' + hardLimitSeconds + ' 秒' : '不按秒数截断，直到视频结束或手动停止') + '，录制格式：' + app.segmentMime + '，分段 ' + settings.segmentSeconds + ' 秒。');
+    scheduleWarmup(50);
+    startCaptureTimer(targetSeconds, hardLimitSeconds);
+    if (hardLimitSeconds > 0) app.stopTimer = setTimeout(() => stopCapture(), hardLimitSeconds * 1000);
+    startSegmentRecorder(sessionId);
   }
 
   async function startCapture() {
@@ -660,8 +846,15 @@
     const mime = pickAudioMime();
     if (!mime) { alert('没有可用音频录制编码。'); return; }
 
-    const seconds = currentSettings().seconds;
-    await startRecorderFromAudioStream(new MediaStream(tracks), mime, seconds, '媒体音频捕获');
+    const settings = currentSettings();
+    const expectedSeconds = settings.unlimitedCapture ? getRemainingMediaSeconds() : settings.seconds;
+    media.addEventListener('ended', () => {
+      if (app.recorder && app.recorder.state !== 'inactive') {
+        log('媒体播放已结束，自动停止音频捕获。', 'success');
+        stopCapture();
+      }
+    }, { once: true });
+    await startRecorderFromAudioStream(new MediaStream(tracks), mime, settings.seconds, '媒体音频捕获', expectedSeconds);
   }
 
   async function startTabCapture() {
@@ -722,7 +915,8 @@
       }
       setStatus('check-capture', '正在捕获标签页音频', 'ok');
       setProgress('audio', 4, '标签页音频捕获', '已获得音频轨，开始录制当前标签页声音。');
-      await startRecorderFromAudioStream(new MediaStream(audioTracks), mime, settings.seconds, '当前标签页音频捕获');
+      const expectedSeconds = settings.unlimitedCapture ? getRemainingMediaSeconds() : settings.seconds;
+      await startRecorderFromAudioStream(new MediaStream(audioTracks), mime, settings.seconds, '当前标签页音频捕获', expectedSeconds);
     } catch (error) {
       stopDisplayCaptureTracks();
       setStatus('check-capture', '授权失败', 'bad');
@@ -733,10 +927,14 @@
   }
 
   function stopCapture() {
-    if (!app.recorder || app.recorder.state === 'inactive') return;
-    setProgress('audio', 98, '音频提取', '正在封装音频 Blob。');
-    log('停止捕获，正在封装音频。');
-    app.recorder.stop();
+    app.segmentStopRequested = true;
+    if (!app.recorder || app.recorder.state === 'inactive') {
+      finalizeSegmentCapture(app.segmentSessionId);
+      return;
+    }
+    setProgress('audio', 98, '音频提取', '正在封装当前分段并停止捕获。');
+    log('停止捕获，正在封装当前分段。');
+    try { app.recorder.stop(); } catch (_) { finalizeSegmentCapture(app.segmentSessionId); }
   }
 
   function languageOptions(language) {
@@ -922,95 +1120,146 @@
     }).join('\n');
   }
 
-  async function transcribe() {
-    if (!app.capturedBlob) {
-      alert('还没有捕获到音频。');
-      return;
-    }
-    if (app.isTranscribing) {
-      log('已有转文字任务正在运行，已忽略重复点击。', 'warn');
-      return;
-    }
-
-    const runId = app.asrRunId + 1;
-    app.asrRunId = runId;
-    app.isTranscribing = true;
-    clearInterval(app.transcribeTimer);
-    setButton('transcribe-btn', false);
-    setButton('capture-start-btn', false);
-    setButton('capture-tab-btn', false);
-    setProgress('asr', 0, 'ASR 识别', '准备音频并启动本地识别。');
-
-    try {
-      const pipe = await ensureTranscriber(runId);
-      if (runId !== app.asrRunId) return;
-
-      const audioUrl = URL.createObjectURL(app.capturedBlob);
-      const started = Date.now();
-      const settings = currentSettings();
-      const fastMode = settings.timestampMode !== 'accurate';
-      const estimateTotal = Math.max(6, app.capturedSeconds * (navigator.gpu ? 0.8 : 2.4));
-
-      app.transcribeTimer = setInterval(() => {
-        if (runId !== app.asrRunId) return;
-        const elapsed = (Date.now() - started) / 1000;
-        const pct = Math.min(96, 35 + (elapsed / estimateTotal) * 61);
-        setProgress('asr', pct, fastMode ? '极速转文字' : '时间戳转文字', '正在转文字：已运行 ' + elapsed.toFixed(1) + ' 秒，估算进度 ' + Math.round(pct) + '%。');
-        setProgress('overall', Math.min(98, 82 + pct * 0.16), '转文字', '本地识别进行中。');
-      }, 700);
-
-      log('开始本地转文字：' + formatBytes(app.capturedBlob.size) + '；模式：' + (fastMode ? '极速文本 + 粗略 SRT' : '时间戳 SRT') + '。');
-      const baseOptions = languageOptions(settings.language);
-      const options = fastMode ? Object.assign({}, baseOptions) : Object.assign({
+  function makeTranscribeOptions(settings) {
+    const baseOptions = languageOptions(settings.language);
+    if (settings.timestampMode === 'accurate') {
+      return Object.assign({
         return_timestamps: true,
         chunk_length_s: 20,
         stride_length_s: 3
       }, baseOptions);
+    }
+    return Object.assign({}, baseOptions);
+  }
 
-      let output;
-      try {
-        output = await pipe(audioUrl, options);
-      } catch (error) {
-        if (!fastMode) {
-          log('时间戳识别失败，改用极速纯文本识别：' + error.message, 'warn');
-          output = await pipe(audioUrl, baseOptions);
-        } else {
-          throw error;
-        }
-      } finally {
-        URL.revokeObjectURL(audioUrl);
+  function appendSegmentTranscript(segment, output, settings) {
+    const rawChunks = settings.timestampMode === 'accurate' ? normalizeChunks(output) : [];
+    let text = String(output && output.text ? output.text : rawChunks.map((x) => x.text).join(' ')).trim();
+    if (!text) text = '';
+
+    let srtChunks;
+    if (rawChunks.length) {
+      srtChunks = rawChunks.map((chunk) => ({
+        start: segment.start + chunk.start,
+        end: segment.start + chunk.end,
+        text: chunk.text
+      }));
+    } else if (text) {
+      srtChunks = [{ start: segment.start, end: segment.end, text }];
+    } else {
+      srtChunks = [];
+    }
+
+    if (text) {
+      app.transcriptText = app.transcriptText ? (app.transcriptText + '\n' + text) : text;
+    }
+    app.segmentResults.push(...srtChunks);
+    app.transcriptSrt = chunksToSrt(app.segmentResults, app.transcriptText);
+    $('transcript-output').value = app.transcriptText;
+    $('srt-output').value = app.transcriptSrt;
+    setButton('download-txt-btn', Boolean(app.transcriptText));
+    setButton('download-srt-btn', Boolean(app.transcriptSrt));
+  }
+
+  function finishSegmentTranscriptionIfDone() {
+    const captureActive = app.recorder && app.recorder.state !== 'inactive';
+    if (app.segmentProcessing || app.segmentQueue.length) return;
+    if (captureActive && !app.segmentStopRequested) {
+      const doneText = app.transcribedSegmentCount > 0
+        ? '已转写 ' + app.transcribedSegmentCount + ' 段，等待下一段音频。'
+        : '模型已准备，等待第一段音频。';
+      setProgress('asr', Math.max(35, Math.min(92, Number($('asr-percent')?.textContent?.replace('%', '')) || 35)), 'ASR 分段识别', doneText);
+      return;
+    }
+    if (app.capturedSegmentCount > 0 && app.transcribedSegmentCount >= app.capturedSegmentCount) {
+      setButton('transcribe-btn', true);
+      setButton('capture-start-btn', app.currentKind !== 'youtube' && app.mediaReadyForCapture);
+      setButton('capture-tab-btn', app.currentKind === 'youtube');
+      setProgress('asr', 100, '转文字完成', '已完成 ' + app.transcribedSegmentCount + ' / ' + app.capturedSegmentCount + ' 段，文本长度 ' + app.transcriptText.length + ' 字符。');
+      setProgress('overall', 100, '完成', '音频捕获和分段转文字完成。');
+      log('分段转文字完成：' + app.transcribedSegmentCount + ' / ' + app.capturedSegmentCount + ' 段，文本长度 ' + app.transcriptText.length + ' 字符。', 'success');
+    }
+  }
+
+  async function processSegmentQueue() {
+    if (app.segmentProcessing) return;
+    if (!app.segmentQueue.length) {
+      finishSegmentTranscriptionIfDone();
+      return;
+    }
+    const runId = app.asrRunId;
+    app.segmentProcessing = true;
+    app.isTranscribing = true;
+    setButton('transcribe-btn', false);
+    try {
+      const pipe = await ensureTranscriber(runId);
+      if (runId !== app.asrRunId) return;
+      while (app.segmentQueue.length && runId === app.asrRunId) {
+        const segment = app.segmentQueue.shift();
+        const settings = currentSettings();
+        const options = makeTranscribeOptions(settings);
+        const audioUrl = URL.createObjectURL(segment.blob);
+        const started = Date.now();
         clearInterval(app.transcribeTimer);
-        app.transcribeTimer = null;
+        app.transcribeTimer = setInterval(() => {
+          if (runId !== app.asrRunId) return;
+          const elapsed = (Date.now() - started) / 1000;
+          const localPct = Math.min(98, 35 + elapsed / Math.max(3, segment.duration * (navigator.gpu ? 0.7 : 1.8)) * 55);
+          const target = app.captureTargetSeconds > 0 ? app.captureTargetSeconds : Math.max(app.capturedSeconds, segment.end, app.transcribedSeconds + segment.duration);
+          const globalPct = target > 0 ? Math.min(98, 35 + ((app.transcribedSeconds + Math.min(segment.duration, elapsed)) / target) * 60) : localPct;
+          setProgress('asr', Math.max(localPct, globalPct), 'ASR 分段识别', '正在转写第 ' + segment.index + ' 段：' + segment.start.toFixed(1) + '-' + segment.end.toFixed(1) + ' 秒；已完成 ' + app.transcribedSegmentCount + ' / ' + app.capturedSegmentCount + ' 段。');
+          setProgress('overall', Math.min(98, 72 + Math.max(localPct, globalPct) * 0.26), '边录边转文字', 'ASR 队列处理中。');
+        }, 700);
+        try {
+          log('开始转写第 ' + segment.index + ' 段：' + formatBytes(segment.blob.size) + '，' + segment.start.toFixed(1) + '-' + segment.end.toFixed(1) + ' 秒。');
+          const output = await pipe(audioUrl, options);
+          appendSegmentTranscript(segment, output, settings);
+          app.transcribedSegmentCount += 1;
+          app.transcribedSeconds = Math.max(app.transcribedSeconds, segment.end);
+          const target = app.captureTargetSeconds > 0 ? app.captureTargetSeconds : Math.max(app.capturedSeconds, app.transcribedSeconds);
+          const pct = target > 0 ? Math.min(99, 35 + (app.transcribedSeconds / target) * 60) : Math.min(96, 35 + app.transcribedSegmentCount * 4);
+          setProgress('asr', pct, 'ASR 分段识别', '第 ' + segment.index + ' 段完成；累计完成 ' + app.transcribedSegmentCount + ' / ' + app.capturedSegmentCount + ' 段。');
+          log('第 ' + segment.index + ' 段转写完成。', 'success');
+        } catch (error) {
+          log('第 ' + segment.index + ' 段转写失败：' + error.message, 'error');
+        } finally {
+          URL.revokeObjectURL(audioUrl);
+          clearInterval(app.transcribeTimer);
+          app.transcribeTimer = null;
+        }
       }
-
-      if (runId !== app.asrRunId) return;
-      const chunks = fastMode ? [] : normalizeChunks(output);
-      app.transcriptText = String(output && output.text ? output.text : chunks.map((x) => x.text).join(' ')).trim();
-      app.transcriptSrt = chunksToSrt(chunks, app.transcriptText);
-      $('transcript-output').value = app.transcriptText;
-      $('srt-output').value = app.transcriptSrt;
-      setButton('download-txt-btn', Boolean(app.transcriptText));
-      setButton('download-srt-btn', Boolean(app.transcriptSrt));
-      setButton('transcribe-btn', true);
-      setButton('capture-start-btn', app.currentKind !== 'youtube' && app.mediaReadyForCapture);
-      setButton('capture-tab-btn', app.currentKind === 'youtube');
-      setProgress('asr', 100, '转文字完成', '识别完成，文本长度 ' + app.transcriptText.length + ' 字符。');
-      setProgress('overall', 100, '完成', '音频和文字处理完成。');
-      log('转文字完成，文本长度 ' + app.transcriptText.length + ' 字符。', 'success');
     } catch (error) {
-      if (runId !== app.asrRunId) return;
-      clearInterval(app.transcribeTimer);
-      app.transcribeTimer = null;
-      setButton('transcribe-btn', true);
-      setButton('capture-start-btn', app.currentKind !== 'youtube' && app.mediaReadyForCapture);
-      setButton('capture-tab-btn', app.currentKind === 'youtube');
       setProgress('asr', 100, '转文字失败', error.message);
       setProgress('overall', 100, '失败', error.message);
       log('转文字失败：' + error.message, 'error');
-      alert('转文字失败：' + error.message + '。可以缩短捕获时长、使用英文优先 + Whisper Tiny，或换网络后重试模型下载。');
+      alert('转文字失败：' + error.message + '。可以先确认模型缓存是否预热成功，或把分段长度调到 30 秒再试。');
     } finally {
-      if (runId === app.asrRunId) app.isTranscribing = false;
+      if (runId === app.asrRunId) {
+        app.segmentProcessing = false;
+        app.isTranscribing = false;
+        finishSegmentTranscriptionIfDone();
+        if (app.segmentQueue.length) processSegmentQueue();
+      }
     }
+  }
+
+  async function transcribe() {
+    if (app.segmentQueue.length || app.segmentProcessing) {
+      processSegmentQueue();
+      return;
+    }
+    if (app.capturedBlob && app.capturedBlob.size > 0 && !app.transcriptText) {
+      const duration = app.capturedSeconds || 0;
+      app.segmentQueue.push({ index: 1, start: 0, end: duration, duration, blob: app.capturedBlob });
+      app.capturedSegmentCount = Math.max(app.capturedSegmentCount, 1);
+      processSegmentQueue();
+      return;
+    }
+    if (app.transcriptText) {
+      alert('当前音频已经转写完成。');
+      return;
+    }
+    alert('还没有可转写的音频分段。');
   }
 
   function download(name, blob) {

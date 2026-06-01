@@ -1,4 +1,4 @@
-const CACHE_NAME = 'subtitle-download-v3-asr-cache';
+const CACHE_NAME = 'subtitle-download-v4-segment-asr-cache';
 const STATIC_ASSETS = [
   './',
   './index.html',

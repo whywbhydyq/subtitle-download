@@ -39,6 +39,8 @@
           <span class="badge">Chrome 桌面端优先</span>
           <span class="badge">极速文本优先</span>
           <span class="badge">模型预热缓存</span>
+          <span class="badge">支持全长捕获</span>
+          <span class="badge">边录边转文字</span>
           <span class="badge">TXT / SRT 导出</span>
         </div>
       </div>
@@ -52,7 +54,7 @@
         <div class="panel-inner">
           <h2>链接检测与音频转文字</h2>
           <p class="subtle" style="margin:10px 0 0">
-            一次点击先给出可用性反馈；如果是可播放且可捕获的媒体直链，可以继续捕获音频并在浏览器本地转成文本/SRT。
+            一次点击先给出可用性反馈；默认捕获到视频结束或手动停止，并按 45 秒分段边录边转文字；不再等完整长视频录完才开始 ASR。需要快速测试时，可在“捕获时长”里填指定秒数。
           </p>
 
           <div class="form-row">
@@ -83,8 +85,14 @@
               </select>
             </div>
             <div class="form-row">
-              <label for="capture-seconds">最长捕获 / 秒</label>
-              <input id="capture-seconds" class="input" type="number" min="5" max="1800" value="20" style="font-family:inherit">
+              <label for="capture-seconds">捕获时长 / 秒</label>
+              <input id="capture-seconds" class="input" type="number" min="0" max="14400" value="0" style="font-family:inherit" title="0 表示不按秒数截断，直到视频结束或手动停止">
+              <div class="field-hint">0 = 捕获到视频结束 / 手动停止；填数字 = 只捕获指定秒数。</div>
+            </div>
+            <div class="form-row">
+              <label for="segment-seconds">分段转写 / 秒</label>
+              <input id="segment-seconds" class="input" type="number" min="10" max="300" value="45" style="font-family:inherit" title="长视频会边录边按这个长度切段转文字">
+              <div class="field-hint">长视频边录边识别；30-60 秒通常更稳。</div>
             </div>
             <div class="form-row">
               <label for="timestamp-mode">输出模式</label>
@@ -172,14 +180,14 @@
         <div class="panel">
           <div class="panel-inner">
             <h3>识别结果</h3>
-            <textarea id="transcript-output" class="textarea" readonly placeholder="识别完成后，纯文本会显示在这里。"></textarea>
+            <textarea id="transcript-output" class="textarea" readonly placeholder="边录边识别时，每完成一个分段就会把文字追加到这里。"></textarea>
           </div>
         </div>
 
         <div class="panel">
           <div class="panel-inner">
             <h3>SRT 字幕</h3>
-            <textarea id="srt-output" class="textarea" readonly placeholder="极速模式会生成粗略 SRT；时间戳模式会尝试生成分段 SRT。"></textarea>
+            <textarea id="srt-output" class="textarea" readonly placeholder="边录边识别时，每完成一个分段就会追加粗略 SRT；时间戳模式会尝试生成更细分段。"></textarea>
           </div>
         </div>
 
@@ -187,6 +195,7 @@
           <div class="panel-inner">
             <h3>当前规则</h3>
             <div class="kv" style="margin-top:14px"><strong>YouTube</strong><span>检测连接、可操作、可播放；通过浏览器授权捕获当前标签页音频后本地转文字。</span></div>
+            <div class="kv"><strong>分段识别</strong><span>长视频默认按 45 秒切段，边捕获边转写；40 分钟视频不再等整段音频录完才开始识别。</span></div>
             <div class="kv"><strong>模型缓存</strong><span>页面启动后会后台预热当前 Tiny 模型，并用 Service Worker / 浏览器缓存减少重复下载。</span></div>
             <div class="kv"><strong>媒体直链</strong><span>尝试播放、captureStream 捕获、MediaRecorder 封装音频、本地 Whisper 转文字。</span></div>
             <div class="kv"><strong>普通网页</strong><span>不能直接拆出视频音频；需要真实媒体链接或服务端解析。</span></div>
