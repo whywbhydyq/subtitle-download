@@ -4,15 +4,12 @@
   const $ = (id) => document.getElementById(id);
 
   const MODEL_MAP = {
-    'tiny:auto': 'onnx-community/whisper-tiny',
-    'tiny:zh': 'onnx-community/whisper-tiny',
-    'tiny:en': 'onnx-community/whisper-tiny.en',
-    'tiny-timestamped:auto': 'onnx-community/whisper-tiny_timestamped',
-    'tiny-timestamped:zh': 'onnx-community/whisper-tiny_timestamped',
-    'tiny-timestamped:en': 'onnx-community/whisper-tiny.en',
-    'base:auto': 'onnx-community/whisper-base',
-    'base:zh': 'onnx-community/whisper-base',
-    'base:en': 'onnx-community/whisper-base.en'
+    'tiny:auto': ['onnx-community/whisper-tiny', 'Xenova/whisper-tiny'],
+    'tiny:zh': ['onnx-community/whisper-tiny', 'Xenova/whisper-tiny'],
+    'tiny:en': ['onnx-community/whisper-tiny.en', 'Xenova/whisper-tiny.en'],
+    'base:auto': ['onnx-community/whisper-base', 'Xenova/whisper-base'],
+    'base:zh': ['onnx-community/whisper-base', 'Xenova/whisper-base'],
+    'base:en': ['onnx-community/whisper-base.en', 'Xenova/whisper-base.en']
   };
 
   const YT_STATE_LABELS = {
@@ -46,7 +43,10 @@
     transcriptText: '',
     transcriptSrt: '',
     transcriber: null,
-    transcriberKey: ''
+    transcriberKey: '',
+    transcriberCache: new Map(),
+    isTranscribing: false,
+    asrRunId: 0
   };
 
   function timeNow() {
@@ -102,8 +102,7 @@
   function resetProgress() {
     setProgress('overall', 0, '总进度', '等待检测。');
     setProgress('audio', 0, '音频提取', '等待捕获。');
-    setProgress('model', 0, '模型加载', '等待识别。');
-    setProgress('text', 0, '转文字', '等待识别。');
+    setProgress('asr', 0, 'ASR 识别', '等待捕获完成。');
   }
 
   function formatBytes(bytes) {
@@ -127,6 +126,10 @@
   }
 
   function resetOutputs() {
+    app.asrRunId += 1;
+    app.isTranscribing = false;
+    clearInterval(app.transcribeTimer);
+    app.transcribeTimer = null;
     if (app.capturedUrl) URL.revokeObjectURL(app.capturedUrl);
     app.captureMode = '';
     app.capturedUrl = '';
@@ -473,7 +476,7 @@
     setStatus('check-capture', '可授权捕获标签页', 'warn');
     setButton('capture-tab-btn', true);
     setProgress('audio', 0, '音频提取', '等待点击“捕获当前标签页音频”。请在浏览器弹窗里选择当前标签页并勾选共享音频。');
-    setProgress('text', 0, '转文字', '捕获完成后会自动开始本地转文字。');
+    setProgress('asr', 0, 'ASR 识别', '捕获完成后会自动开始本地转文字。');
     log('结论：该 YouTube 链接可连接、可操作；下一步点击“捕获当前标签页音频”，授权后即可录制标签页声音并转文字。', 'success');
     return false;
   }
@@ -482,7 +485,8 @@
     return {
       language: $('language-select')?.value || 'auto',
       model: $('model-select')?.value || 'tiny',
-      seconds: Math.max(5, Math.min(1800, Number($('capture-seconds')?.value) || 60))
+      seconds: Math.max(5, Math.min(1800, Number($('capture-seconds')?.value) || 20)),
+      timestampMode: $('timestamp-mode')?.value || 'fast'
     };
   }
 
@@ -579,11 +583,12 @@
   async function startRecorderFromAudioStream(audioStream, mime, seconds, modeLabel) {
     if (!audioStream || !audioStream.getAudioTracks().length) throw new Error('没有可录制的音轨。');
     resetOutputs();
+    setProgress('asr', 0, 'ASR 识别', '等待音频捕获完成。');
     app.chunks = [];
     app.capturedBlob = null;
     app.captureStartedAt = Date.now();
     app.captureMode = modeLabel;
-    app.recorder = new MediaRecorder(audioStream, { mimeType: mime });
+    app.recorder = new MediaRecorder(audioStream, { mimeType: mime, audioBitsPerSecond: 32000 });
     app.recorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0) app.chunks.push(event.data);
     };
@@ -717,12 +722,12 @@
     return { task: 'transcribe' };
   }
 
-  function modelName() {
+  function candidateModelNames() {
     const settings = currentSettings();
-    return MODEL_MAP[settings.model + ':' + settings.language] || 'onnx-community/whisper-tiny';
+    return MODEL_MAP[settings.model + ':' + settings.language] || MODEL_MAP['tiny:auto'];
   }
 
-  async function loadTransformers() {
+  async function loadTransformers(runId) {
     if (window.__subtitleDownloadTransformers) return window.__subtitleDownloadTransformers;
     const urls = [
       'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.0/dist/transformers.min.js',
@@ -731,7 +736,10 @@
     let lastError;
     for (const url of urls) {
       try {
-        log('加载识别运行库：' + url);
+        if (runId === app.asrRunId) {
+          setProgress('asr', 6, 'ASR 运行库', '正在加载 Transformers.js 运行库。');
+          log('加载识别运行库：' + url);
+        }
         const mod = await import(url);
         window.__subtitleDownloadTransformers = mod;
         return mod;
@@ -743,34 +751,60 @@
     throw lastError || new Error('无法加载 Transformers.js。');
   }
 
-  async function ensureTranscriber() {
-    const model = modelName();
-    const device = navigator.gpu ? 'webgpu' : 'wasm';
-    const key = model + '@' + device;
-    if (app.transcriber && app.transcriberKey === key) return app.transcriber;
-    setProgress('model', 8, '模型加载', '正在加载 Transformers.js 运行库。');
-    setProgress('overall', 74, '模型加载', '准备加载识别模型。');
-    const mod = await loadTransformers();
+  async function ensureTranscriber(runId) {
+    const mod = await loadTransformers(runId);
     if (!mod || typeof mod.pipeline !== 'function') throw new Error('Transformers.js 加载异常，未找到 pipeline。');
-    setProgress('model', 12, '模型加载', '正在加载模型：' + model + '。首次使用会下载模型文件。');
-    log('加载模型：' + model + '；设备：' + device + '。');
-    app.transcriber = await mod.pipeline('automatic-speech-recognition', model, {
-      device,
-      progress_callback: (data) => {
-        if (!data) return;
-        if (data.status === 'progress' && typeof data.progress === 'number') {
-          const pct = Math.max(0, Math.min(100, data.progress));
-          setProgress('model', pct, '模型下载', '正在下载模型文件：' + Math.round(pct) + '%。');
-          setProgress('overall', 74 + pct * 0.12, '模型下载', '模型文件下载中。');
-        } else if (data.status === 'ready') {
-          setProgress('model', 100, '模型加载', '模型已加载。');
-          log('模型已加载。', 'success');
+
+    const modelCandidates = candidateModelNames();
+    const deviceCandidates = navigator.gpu ? ['webgpu', 'wasm'] : ['wasm'];
+    let lastError;
+
+    for (const device of deviceCandidates) {
+      for (const model of modelCandidates) {
+        const key = model + '@' + device;
+        if (app.transcriberCache.has(key)) {
+          app.transcriber = app.transcriberCache.get(key);
+          app.transcriberKey = key;
+          if (runId === app.asrRunId) {
+            setProgress('asr', 35, 'ASR 模型已缓存', '复用已加载模型：' + model + ' / ' + device + '。');
+            log('复用已加载模型：' + model + '；设备：' + device + '。', 'success');
+          }
+          return app.transcriber;
+        }
+
+        try {
+          if (runId === app.asrRunId) {
+            setProgress('asr', 10, '模型加载', '正在加载模型：' + model + '（' + device + '）。首次使用会下载模型文件。');
+            setProgress('overall', 74, 'ASR 模型加载', '准备加载识别模型。');
+            log('加载模型：' + model + '；设备：' + device + '。');
+          }
+          const pipe = await mod.pipeline('automatic-speech-recognition', model, {
+            device,
+            progress_callback: (data) => {
+              if (runId !== app.asrRunId || !data) return;
+              if (data.status === 'progress' && typeof data.progress === 'number') {
+                const pct = Math.max(0, Math.min(100, data.progress));
+                const scaled = 10 + pct * 0.25;
+                setProgress('asr', scaled, '模型下载', '正在下载模型文件：' + Math.round(pct) + '%。');
+                setProgress('overall', 74 + pct * 0.08, '模型下载', '模型文件下载中。');
+              } else if (data.status === 'ready') {
+                setProgress('asr', 35, '模型加载', '模型已加载，准备识别。');
+                log('模型已加载。', 'success');
+              }
+            }
+          });
+          app.transcriberCache.set(key, pipe);
+          app.transcriber = pipe;
+          app.transcriberKey = key;
+          if (runId === app.asrRunId) setProgress('asr', 35, '模型加载', '模型已加载，准备识别。');
+          return pipe;
+        } catch (error) {
+          lastError = error;
+          log('模型加载失败，尝试下一个候选：' + model + ' / ' + device + '：' + error.message, 'warn');
         }
       }
-    });
-    app.transcriberKey = key;
-    setProgress('model', 100, '模型加载', '模型已加载。');
-    return app.transcriber;
+    }
+    throw lastError || new Error('模型加载失败。');
   }
 
   function secondsToSrtTime(seconds) {
@@ -809,40 +843,64 @@
       alert('还没有捕获到音频。');
       return;
     }
+    if (app.isTranscribing) {
+      log('已有转文字任务正在运行，已忽略重复点击。', 'warn');
+      return;
+    }
+
+    const runId = app.asrRunId + 1;
+    app.asrRunId = runId;
+    app.isTranscribing = true;
     clearInterval(app.transcribeTimer);
     setButton('transcribe-btn', false);
-    setProgress('text', 0, '转文字', '准备音频并启动本地识别。');
+    setButton('capture-start-btn', false);
+    setButton('capture-tab-btn', false);
+    setProgress('asr', 0, 'ASR 识别', '准备音频并启动本地识别。');
+
     try {
-      const pipe = await ensureTranscriber();
+      const pipe = await ensureTranscriber(runId);
+      if (runId !== app.asrRunId) return;
+
       const audioUrl = URL.createObjectURL(app.capturedBlob);
       const started = Date.now();
-      const estimateTotal = Math.max(18, app.capturedSeconds * (navigator.gpu ? 1.4 : 5));
+      const settings = currentSettings();
+      const fastMode = settings.timestampMode !== 'accurate';
+      const estimateTotal = Math.max(6, app.capturedSeconds * (navigator.gpu ? 0.8 : 2.4));
+
       app.transcribeTimer = setInterval(() => {
+        if (runId !== app.asrRunId) return;
         const elapsed = (Date.now() - started) / 1000;
-        const pct = Math.min(96, (elapsed / estimateTotal) * 96);
-        setProgress('text', pct, '转文字', '正在转文字：已运行 ' + elapsed.toFixed(1) + ' 秒，估算进度 ' + Math.round(pct) + '%。');
-        setProgress('overall', Math.min(98, 86 + pct * 0.12), '转文字', '本地识别进行中。');
+        const pct = Math.min(96, 35 + (elapsed / estimateTotal) * 61);
+        setProgress('asr', pct, fastMode ? '极速转文字' : '时间戳转文字', '正在转文字：已运行 ' + elapsed.toFixed(1) + ' 秒，估算进度 ' + Math.round(pct) + '%。');
+        setProgress('overall', Math.min(98, 82 + pct * 0.16), '转文字', '本地识别进行中。');
       }, 700);
 
-      log('开始本地转文字：' + formatBytes(app.capturedBlob.size) + '。');
-      const settings = currentSettings();
-      const options = Object.assign({
+      log('开始本地转文字：' + formatBytes(app.capturedBlob.size) + '；模式：' + (fastMode ? '极速文本 + 粗略 SRT' : '时间戳 SRT') + '。');
+      const baseOptions = languageOptions(settings.language);
+      const options = fastMode ? Object.assign({}, baseOptions) : Object.assign({
         return_timestamps: true,
-        chunk_length_s: 30,
-        stride_length_s: 5
-      }, languageOptions(settings.language));
+        chunk_length_s: 20,
+        stride_length_s: 3
+      }, baseOptions);
+
       let output;
       try {
         output = await pipe(audioUrl, options);
       } catch (error) {
-        log('带时间戳识别失败，改用纯文本识别：' + error.message, 'warn');
-        output = await pipe(audioUrl, languageOptions(settings.language));
+        if (!fastMode) {
+          log('时间戳识别失败，改用极速纯文本识别：' + error.message, 'warn');
+          output = await pipe(audioUrl, baseOptions);
+        } else {
+          throw error;
+        }
       } finally {
         URL.revokeObjectURL(audioUrl);
         clearInterval(app.transcribeTimer);
         app.transcribeTimer = null;
       }
-      const chunks = normalizeChunks(output);
+
+      if (runId !== app.asrRunId) return;
+      const chunks = fastMode ? [] : normalizeChunks(output);
       app.transcriptText = String(output && output.text ? output.text : chunks.map((x) => x.text).join(' ')).trim();
       app.transcriptSrt = chunksToSrt(chunks, app.transcriptText);
       $('transcript-output').value = app.transcriptText;
@@ -850,17 +908,24 @@
       setButton('download-txt-btn', Boolean(app.transcriptText));
       setButton('download-srt-btn', Boolean(app.transcriptSrt));
       setButton('transcribe-btn', true);
-      setProgress('text', 100, '转文字', '识别完成，文本长度 ' + app.transcriptText.length + ' 字符。');
+      setButton('capture-start-btn', app.currentKind !== 'youtube' && app.mediaReadyForCapture);
+      setButton('capture-tab-btn', app.currentKind === 'youtube');
+      setProgress('asr', 100, '转文字完成', '识别完成，文本长度 ' + app.transcriptText.length + ' 字符。');
       setProgress('overall', 100, '完成', '音频和文字处理完成。');
       log('转文字完成，文本长度 ' + app.transcriptText.length + ' 字符。', 'success');
     } catch (error) {
+      if (runId !== app.asrRunId) return;
       clearInterval(app.transcribeTimer);
       app.transcribeTimer = null;
       setButton('transcribe-btn', true);
-      setProgress('text', 100, '转文字失败', error.message);
+      setButton('capture-start-btn', app.currentKind !== 'youtube' && app.mediaReadyForCapture);
+      setButton('capture-tab-btn', app.currentKind === 'youtube');
+      setProgress('asr', 100, '转文字失败', error.message);
       setProgress('overall', 100, '失败', error.message);
       log('转文字失败：' + error.message, 'error');
-      alert('转文字失败：' + error.message + '。可以缩短捕获时长、切换 Tiny 模型，或换一个允许跨域的媒体直链。');
+      alert('转文字失败：' + error.message + '。可以缩短捕获时长、使用英文优先 + Whisper Tiny，或换网络后重试模型下载。');
+    } finally {
+      if (runId === app.asrRunId) app.isTranscribing = false;
     }
   }
 

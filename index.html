@@ -37,7 +37,7 @@
         <div class="badges">
           <span class="badge">纯前端页面</span>
           <span class="badge">Chrome 桌面端优先</span>
-          <span class="badge">本地 Whisper 识别</span>
+          <span class="badge">极速文本优先</span>
           <span class="badge">TXT / SRT 导出</span>
         </div>
       </div>
@@ -77,14 +77,20 @@
             <div class="form-row">
               <label for="model-select">本地模型</label>
               <select id="model-select" class="select">
-                <option value="tiny" selected>Whisper Tiny（快）</option>
-                <option value="tiny-timestamped">Whisper Tiny Timestamped</option>
+                <option value="tiny" selected>Whisper Tiny（最快）</option>
                 <option value="base">Whisper Base（较准，较慢）</option>
               </select>
             </div>
             <div class="form-row">
               <label for="capture-seconds">最长捕获 / 秒</label>
-              <input id="capture-seconds" class="input" type="number" min="5" max="1800" value="60" style="font-family:inherit">
+              <input id="capture-seconds" class="input" type="number" min="5" max="1800" value="20" style="font-family:inherit">
+            </div>
+            <div class="form-row">
+              <label for="timestamp-mode">输出模式</label>
+              <select id="timestamp-mode" class="select">
+                <option value="fast" selected>极速文本 + 粗略 SRT</option>
+                <option value="accurate">时间戳 SRT（较慢）</option>
+              </select>
             </div>
           </div>
 
@@ -131,14 +137,9 @@
               <p id="audio-detail" class="subtle" style="margin:8px 0 0;font-size:13px">等待捕获。</p>
             </div>
             <div class="progress-box">
-              <div class="progress-top"><span id="model-label">模型加载</span><span id="model-percent">0%</span></div>
-              <div class="track"><div id="model-bar" class="bar"></div></div>
-              <p id="model-detail" class="subtle" style="margin:8px 0 0;font-size:13px">等待识别。</p>
-            </div>
-            <div class="progress-box">
-              <div class="progress-top"><span id="text-label">转文字</span><span id="text-percent">0%</span></div>
-              <div class="track"><div id="text-bar" class="bar"></div></div>
-              <p id="text-detail" class="subtle" style="margin:8px 0 0;font-size:13px">等待识别。</p>
+              <div class="progress-top"><span id="asr-label">ASR 识别</span><span id="asr-percent">0%</span></div>
+              <div class="track"><div id="asr-bar" class="bar"></div></div>
+              <p id="asr-detail" class="subtle" style="margin:8px 0 0;font-size:13px">等待捕获完成。</p>
             </div>
           </div>
 
@@ -176,7 +177,7 @@
         <div class="panel">
           <div class="panel-inner">
             <h3>SRT 字幕</h3>
-            <textarea id="srt-output" class="textarea" readonly placeholder="如果模型返回时间戳，SRT 会显示在这里；否则会生成一个粗略时间段。"></textarea>
+            <textarea id="srt-output" class="textarea" readonly placeholder="极速模式会生成粗略 SRT；时间戳模式会尝试生成分段 SRT。"></textarea>
           </div>
         </div>
 
